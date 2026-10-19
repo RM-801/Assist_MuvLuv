@@ -1,3 +1,5 @@
+> Fork status: experimental DMM updates. See [fork setup, features and known limitations](FORK_NOTES.md) before running. The original README follows.
+
 # Assist MuvLuv
 
 ## Demo

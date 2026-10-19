@@ -1,4 +1,4 @@
-#Region
+﻿#Region
 #AutoIt3Wrapper_UseX64=y
 #EndRegion
 
@@ -7,6 +7,16 @@
 #include <GUIConstantsEx.au3>
 #include <ScreenCapture.au3>
 #include <StaticConstants.au3>
+#include "Libs\ImageScaleSafe.au3"
+#include "Libs\MazeShopCache.au3"
+#include "Libs\ShopDetails.au3"
+#include "Libs\ShopCompletion.au3"
+
+If Not ShopCacheInitialize() Then
+    MsgBox(16, "Shop settings", "Cannot initialize Data\MazeShop.ini. Check the default layout file and folder permissions.")
+    Exit 1
+EndIf
+
 
 ; Assume the game window size is 1264x712, not the client area size.
 ;   The size is it because my template images are captured on this size.
@@ -15,6 +25,7 @@
 ; The function `ImageSearch` has a parameter relating to this size.
 
 DllCall("user32.dll", "bool", "SetProcessDPIAware")
+Opt("MouseClickDownDelay", 100)
 Local $arrDPIs = DllCall("user32.dll", "uint", "GetDpiForSystem") ; Windows 10+
 Local $iWinScale = $arrDPIs[0] / 96 ; DPI 96 is 100%
 
@@ -26,6 +37,11 @@ Global $sGameWinTitle   = "マブラヴ"
 Global $sGameResDir     = @ScriptDir & "\Games\MuvLuv\"
 Global $sScriptLog      = @ScriptDir & "\Game_MuvLuv.log"
 Global $iLoopTimer      = 500
+; A new-stage unlock animation can leave the visible Start button unresponsive.
+Global $iQuestStartWaitMs = 4500
+Global $hQuestStartVisible = 0
+Global $hQuestPageLastSeen = 0
+Global $g_RouteSelectAttempts = 0
 
 Global $bMazeFarmingOn  = True
 Global $bMazeCraftSkip  = True
@@ -59,7 +75,7 @@ EndFunc
 ; The font and size.
 Local $sFont = "Segoe UI"
 Local $iFontSize = 10
-Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(255 * $iWinScale)
+Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(355 * $iWinScale)
 
 Local $hGUI = GUICreate("MuvLuv Auto", $iGUIWidth, $iGUIHeight)
 GUISetFont($iFontSize, $FW_NORMAL, 0, $sFont)
@@ -76,7 +92,7 @@ GUICtrlSetFont($btnStart, 11, $FW_BOLD, 0, $sFont)
 Local $iPadTop = 3
 Local $iStatusW = Int(120 * $iWinScale), $iStatusH = Int(25 * $iWinScale) - $iPadTop
 Local $iStatusX = Int(($iGUIWidth - $iStatusW) / 2)
-Local $iStatusY = Int(10 * $iWinScale) + $iBtnH + Int(10 * $iWinScale) ; 合并 Gap 运算
+Local $iStatusY = Int(10 * $iWinScale) + $iBtnH + Int(10 * $iWinScale) ; Combine button height and vertical spacing
 
 Local $lblStatusPad = GUICtrlCreateLabel("", $iStatusX, $iStatusY, $iStatusW, $iPadTop)
 GUICtrlSetBkColor($lblStatusPad, 0x000000)
@@ -126,6 +142,19 @@ Local $chkCraftSkipText = GUICtrlCreateLabel("Skip Crafting in Maze", $iChkCraft
 GUICtrlSetState($chkCraftSkip, $GUI_CHECKED)
 _RegisterThemeCtrl($chkCraftSkipText)
 
+Local $areaLabel = GUICtrlCreateLabel("Target area", Int(20*$iWinScale), Int(168*$iWinScale), Int(125*$iWinScale), Int(24*$iWinScale))
+_RegisterThemeCtrl($areaLabel)
+Global $inpArea = GUICtrlCreateInput(IniRead($g_ShopCacheFile, "Settings", "TargetArea", "100"), Int(155*$iWinScale), Int(165*$iWinScale), Int(70*$iWinScale), Int(25*$iWinScale))
+Local $reportLabel = GUICtrlCreateLabel("スキルレポート優先属性", Int(20*$iWinScale), Int(198*$iWinScale), Int(220*$iWinScale), Int(20*$iWinScale))
+_RegisterThemeCtrl($reportLabel)
+Global $cmbReportPriority = GUICtrlCreateCombo("", Int(20*$iWinScale), Int(220*$iWinScale), Int(215*$iWinScale), Int(25*$iWinScale), 3)
+Local $savedReportPriority = IniRead($g_ShopCacheFile,"Settings","ReportPriority","指定なし")
+; Preserve any selected attribute; normalize legacy/default labels for display.
+If ShopReportSlot($savedReportPriority) < 0 Then $savedReportPriority = "指定なし"
+GUICtrlSetData($cmbReportPriority, "指定なし|アグレッシブ|スマート|シャイ|キュート|コミカル|クレバー", $savedReportPriority)
+
+#include "Libs\MazeArea.au3"
+#include "Libs\StoryUI.au3"
 ; Listen to the theme change
 GUIRegisterMsg(0x001A, "WM_SETTINGCHANGE")
 _ApplySystemTheme($hGUI)
@@ -174,6 +203,7 @@ $iBtnBottom = -1
 GUISetState(@SW_SHOW)
 HotKeySet("{ESC}", "ActionStop")
 HotKeySet("{END}", "ActionStop")
+HotKeySet("{F9}", "ResetShopRecords")
 While True
     Local $aMousePos = GUIGetCursorInfo($hGUI)
     If Not @error Then
@@ -237,20 +267,41 @@ Func ResetPausingState()
 EndFunc
 
 Func ActionStart()
+    $g_RouteSelectAttempts = 0
+    ; Manual progression while stopped may have raised daily limits.
+    ShopDailyInvalidate()
+    $g_ReportPriority = GUICtrlRead($cmbReportPriority)
+    IniWrite($g_ShopCacheFile,"Settings","ReportPriority",$g_ReportPriority)
+    Local $requested = StringStripWS(GUICtrlRead($inpArea), 3)
+    If Not StringRegExp($requested, "^[1-9][0-9]{0,2}$") Then
+        MsgBox(48, "Target area", "Enter a whole-number area ID from 1 to 999.")
+        Return
+    EndIf
+    $g_TargetArea = Int($requested)
+    $g_ShopDetectedArea = 0
+    $g_AreaSteps = 0
+    $g_AreaLastRows = ""
+    $g_AreaStuck = 0
+    IniWrite($g_ShopCacheFile, "Settings", "TargetArea", $g_TargetArea)
+    $hQuestStartVisible = 0
+    $hQuestPageLastSeen = 0
+    WriteLog("Started: main-page v4; multi-scale button; yielding loop")
     GUICtrlSetData($btnStart, "Stop")
     GUICtrlSetData($lblStatus, "  Status: Running ")
     GUICtrlSetColor($lblStatus, 0x00FF00)
     $bRunning = True
-    AdlibRegister("AutoClick", $iLoopTimer)
+    AdlibRegister("AutoClickTick", $iLoopTimer)
 EndFunc
 
 Func ActionStop()
+    $hQuestStartVisible = 0
+    $hQuestPageLastSeen = 0
     GUICtrlSetData($btnStart, "Start")
     GUICtrlSetData($lblStatus, "  Status: Idle    ")
     GUICtrlSetColor($lblStatus, 0xFFFFFF)
     $bRunning = False
     ResetPausingState()
-    AdlibUnRegister("AutoClick")
+    AdlibUnRegister("AutoClickTick")
 EndFunc
 
 Func ActionContinue()
@@ -323,35 +374,41 @@ EndFunc
 ;   Assuming using SmartSystemMenu to resize to 1280x720 that give the game window size 1264x712 reducing the border
 ;   shadow size I think.
 ; =====================================================================================================================
-Func ImageSearch($sImageFile, $fThreshold = 0.8, $arrSubArea = Default, $iBaseHeight = 712)
-    Local $imgTempl = _OpenCV_imread_and_check($sImageFile)
-
+Func ImageSearch($sImageFile, $fThreshold = 0.8, $arrSubArea = Default, $iBaseHeight = 712, $templateScale = 1)
     Local $arrArea = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
+    If Not IsArray($arrArea) Then Return False
+    If UBound($arrArea) < 4 Then Return False
+    If $arrArea[2] < 200 Or $arrArea[3] < 200 Or $iBaseHeight <= 0 Then Return False
     Local $iActualHeight = $arrArea[3]
-    If $arrSubArea <> Default Then
-        $arrArea[0] += $arrSubArea[0]
-        $arrArea[1] += $arrSubArea[1]
-        $arrArea[2] = $arrSubArea[2]
-        $arrArea[3] = $arrSubArea[3]
+    Local $fProportion = $iActualHeight / $iBaseHeight
+    Local $imgTempl = _OpenCV_imread_and_check($sImageFile)
+    If Not IsObj($imgTempl) Then Return False
+    If $imgTempl.empty() Then Return False
+
+    ; Scale the search region BEFORE capturing its pixels.
+    If IsArray($arrSubArea) Then
+        $arrArea[0] += Int($arrSubArea[0] * $fProportion)
+        $arrArea[1] += Int($arrSubArea[1] * $fProportion)
+        $arrArea[2] = Int($arrSubArea[2] * $fProportion)
+        $arrArea[3] = Int($arrSubArea[3] * $fProportion)
     EndIf
+    If $arrArea[2] < 1 Or $arrArea[3] < 1 Then Return False
     Local $imgScreen = _OpenCV_GetDesktopScreenMat($arrArea)
+    If Not IsObj($imgScreen) Then Return False
+    If $imgScreen.empty() Then Return False
 
-    If $imgTempl.empty() Or $imgScreen.empty() Then
-        Return False
-    EndIf
-
-    If $iActualHeight <> $iBaseHeight Then
-        Local $fProportion = $iActualHeight / $iBaseHeight
-        If $arrSubArea <> Default Then
-            $arrArea[0] += int($arrSubArea[0] * ($fProportion - 1))
-            $arrArea[1] += int($arrSubArea[1] * ($fProportion - 1))
+    If $iActualHeight <> $iBaseHeight Or $templateScale <> 1 Then
+        Local $iAdjWidth = Int($imgTempl.width * $fProportion * $templateScale)
+        Local $iAdjHeight = Int($imgTempl.height * $fProportion * $templateScale)
+        Local $resized = _AssistResize($cv, $imgTempl, $iAdjWidth, $iAdjHeight)
+        If Not IsObj($resized) Then
+            WriteLog("Resize failed: " & $sImageFile & "; window height=" & $iActualHeight & "; " & $g_AssistResizeError)
+            ActionStop()
+            Return False
         EndIf
-        $arrArea[2] = int($arrArea[2] * $fProportion)
-        $arrArea[3] = int($arrArea[3] * $fProportion)
-        Local $iAdjWidth = int($imgTempl.width * $fProportion)
-        Local $iAdjHeight = int($imgTempl.height * $fProportion)
-        $imgTempl = $cv.resize($imgTempl, _OpenCV_Size($iAdjWidth, $iAdjHeight))
+        $imgTempl = $resized
     EndIf
+    If $imgTempl.width > $imgScreen.width Or $imgTempl.height > $imgScreen.height Then Return False
 
     Local $iN = 1
 
@@ -360,8 +417,9 @@ Func ImageSearch($sImageFile, $fThreshold = 0.8, $arrSubArea = Default, $iBaseHe
     Local $iTotalCosts = $imgScreen.width * $imgScreen.height * $imgTempl.width * $imgTempl.height
     If $iTotalCosts > 147456000000 Then
         $iN = 2
-        $imgTemplOpt = $cv.resize($imgTemplOpt, _OpenCV_Size($imgTempl.width / $iN, $imgTempl.height / $iN))
-        $imgScreenOpt = $cv.resize($imgScreenOpt, _OpenCV_Size($imgScreen.width / $iN, $imgScreen.height / $iN))
+        $imgTemplOpt = _AssistResize($cv, $imgTemplOpt, Int($imgTempl.width / $iN), Int($imgTempl.height / $iN))
+        $imgScreenOpt = _AssistResize($cv, $imgScreenOpt, Int($imgScreen.width / $iN), Int($imgScreen.height / $iN))
+        If Not IsObj($imgTemplOpt) Or Not IsObj($imgScreenOpt) Then Return False
     EndIf
     Local $matchResults = _OpenCV_FindTemplate($imgScreenOpt, $imgTemplOpt, $fThreshold)  ; Covariant Matrix Normal
     If IsArray($matchResults) And UBound($matchResults) > 0 Then
@@ -388,11 +446,11 @@ EndFunc
 ; CD: If the image would still be presented for a while after being clicked,
 ; then if in the next loop the same image is the
 ; "next" detected, skip it for 1 as the CD unit.
-Func ClickImage($sImageFile, $fThreshold = 0.85, $iShiftX = 0, $iShiftY = 0, $bCDOn = False, $iCDMax = 2, $arrSubArea = Default, $iBaseHeight = 712)
+Func ClickImage($sImageFile, $fThreshold = 0.85, $iShiftX = 0, $iShiftY = 0, $bCDOn = False, $iCDMax = 2, $arrSubArea = Default, $iBaseHeight = 712, $templateScale = 1)
     Static $sCDImageFile = ""
     Static $iCD = 0
 
-    Local $arrRect = ImageSearch($sImageFile, $fThreshold, $arrSubArea, $iBaseHeight)
+    Local $arrRect = ImageSearch($sImageFile, $fThreshold, $arrSubArea, $iBaseHeight, $templateScale)
     If Not IsArray($arrRect) Then
         Return SetError(1, 0, False)
     EndIf
@@ -426,6 +484,121 @@ Func ClickImage($sImageFile, $fThreshold = 0.85, $iShiftX = 0, $iShiftY = 0, $bC
 EndFunc
 
 ; Maze Shop Functions
+Func ResetShopRecords()
+    ActionStop()
+    ShopCacheInvalidate()
+    GUICtrlSetData($lblStatus, " Shop: Recheck  ")
+    WriteLog("Shop cache invalidated by F9; full review on next Start.")
+EndFunc
+
+Func ShopRecordedCardArea($slot)
+    Local $a[4] = [315 + 495 * Mod($slot, 2), 182 + 126 * Int($slot / 2), 380, 116]
+    Return $a
+EndFunc
+
+Func ShopRecordedPageIsMax()
+    Local $count = Int(IniRead($g_ShopCacheFile, "page." & $g_ShopCachePage, "Slots", "0"))
+    If $count < 1 Or $count > 5 Then Return False
+    Local $allMax = True
+    For $i = 0 To $count - 1
+        Local $area = ShopRecordedCardArea($i)
+        Local $identity = $sGameResDir & "MazeShop\Cache_" & $g_ShopCachePage & "_" & $i & ".png"
+        If Not IsArray(ImageSearch($identity, 0.85, $area)) Then
+            If ShopCacheScopeMatches() Then IniWrite($g_ShopCacheFile, ShopCachePageSection($g_ShopCachePage), "AllMax", "0")
+            WriteLog("Shop layout mismatch: " & $g_ShopCachePage & " slot " & $i)
+            ActionStop()
+            GUICtrlSetData($lblStatus, " Shop: Check UI ")
+            Return False
+        EndIf
+        Local $maxed = IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_LvMAX.png", 0.88, $area))
+        If ShopCacheScopeMatches() Then IniWrite($g_ShopCacheFile, ShopCacheItemSection($g_ShopCachePage, $i), "MaxVisible", $maxed ? "1" : "0")
+        If Not $maxed Then $allMax = False
+    Next
+    If $bRunning And ShopPageNeedsLevels($g_ShopCachePage) Then
+        Local $levels[4] = [315, 210, 900, 360]
+        ShopRecordLevels($g_ShopCachePage, MazeAreaOCR($levels, "en*", 2))
+    EndIf
+    If $allMax Then
+        ShopCacheMarkPageMax($g_ShopCachePage)
+    Else
+        If ShopCacheScopeMatches() Then IniWrite($g_ShopCacheFile, ShopCachePageSection($g_ShopCachePage), "AllMax", "0")
+    EndIf
+    ShopCompletionRecord($g_ShopCachePage, $allMax)
+    Return $allMax
+EndFunc
+
+Func ShopRecordedScanBuy($image, $threshold, $cd, $factor)
+    Local $count = Int(IniRead($g_ShopCacheFile, "page." & $g_ShopCachePage, "Slots", "0"))
+    For $i = 0 To $count - 1
+        If Not $bRunning Then Return False
+        Local $area = ShopRecordedCardArea($i)
+        Local $identity = $sGameResDir & "MazeShop\Cache_" & $g_ShopCachePage & "_" & $i & ".png"
+        If Not IsArray(ImageSearch($identity, 0.85, $area)) Then ContinueLoop
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_LvMAX.png", 0.88, $area)) Then ContinueLoop
+        If ShopMaterialsShort($area) Then ContinueLoop
+        If ClickImage($sGameResDir & "MazeShop\" & $image, $threshold, 0, 0, $cd, $factor, $area) Then
+            ShopCacheMarkAttempt($g_ShopCachePage, $i)
+            Return True
+        EndIf
+    Next
+    Return False
+EndFunc
+
+Func ShopReadInteger($text)
+    Local $lines=StringSplit(StringStripCR($text),@LF,1),$value=-1
+    For $i=1 To $lines[0]
+        Local $p=StringSplit($lines[$i],"|",1)
+        If $p[0]<>5 Then ContinueLoop
+        Local $s=StringRegExpReplace($p[5],"[\s,，]","")
+        If Not StringRegExp($s,"^\d{1,9}$") Then ContinueLoop
+        If $value>=0 Then Return -1
+        $value=Number($s)
+    Next
+    Return $value
+EndFunc
+
+Func ShopPurchaseUncertain($reason)
+    WriteLog("Shop kept open: " & $g_ShopCachePage & "; " & $reason)
+    ActionStop()
+    GUICtrlSetData($lblStatus,"Shop: Check buy")
+    Return False
+EndFunc
+
+
+Func ShopMaterialsShort($area)
+    Local $button[4]=[$area[0]+175,$area[1]+30,205,85]
+    Local $sizes[5]=[1,0.975,1.025,0.95,1.05]
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\UpgradeMaterialsShort.png",0.88,$button,712,$size)) Then Return True
+    Next
+    Return False
+EndFunc
+
+Func ShopCanLeaveUpgradePage()
+    Local $count=Int(IniRead($g_ShopCacheFile,"page." & $g_ShopCachePage,"Slots","0"))
+    If $count<1 Then Return ShopPurchaseUncertain("no registered items")
+    Local $balance=-1
+    For $i=0 To $count-1
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+        Local $area=ShopRecordedCardArea($i)
+        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_" & $g_ShopCachePage & "_" & $i & ".png",0.85,$area)) Then Return ShopPurchaseUncertain("item identity changed at slot " & $i)
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_LvMAX.png",0.88,$area)) Then ContinueLoop
+        ; Insufficient materials is temporary, never cache it as a maxed upgrade.
+        If ShopMaterialsShort($area) Then ContinueLoop
+        If $balance<0 Then
+            Local $currency[4]=[1115,65,110,45]
+            $balance=ShopReadInteger(MazeAreaOCR($currency,"en*",3))
+        EndIf
+        If $balance=0 Then
+            ; Require a fresh second reading of the whole number, not a zero glyph.
+            If ShopReadInteger(MazeAreaOCR($currency,"en*",3))=0 Then Return True
+        EndIf
+        Return ShopPurchaseUncertain("unfinished item without materials-shortage label; slot=" & $i & "; ore=" & $balance)
+    Next
+    WriteLog("Shop page checked: " & $g_ShopCachePage & "; every item is MAX or explicitly lacks materials.")
+    Return True
+EndFunc
+
 Func MazeShopBuying()
     Local $fDefaultThreshold = 0.80, $fHigherThreshold = 0.90
     Local $bDefaultCDOn = False, $iDefaultCDFactor = 2
@@ -433,6 +606,9 @@ Func MazeShopBuying()
 
     Sleep($iDelayReaction)
     If Not $bRunning Then Return True
+    If $g_ShopCachePage <> "" And ShopRecordedPageIsMax() Then Return False
+    If Not $bRunning Then Return True
+    ; Preserve the user-selected upgrade multiplier, including MAX.
 
     While _ScanAndClickBuy("BuyUpgrade.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor)
         Sleep($iDelayAnimate)
@@ -469,14 +645,12 @@ Func MazeShopBuying()
 
     If Not $bRunning Then Return True
 
-    Local $areaCurrency = [1060, 70, 160, 45]
-    If ClickImage($sGameResDir & "Maze_Shop.png", $fHigherThreshold, -50, 570, $bDefaultCDOn, $iDefaultCDFactor, $areaCurrency) Then
-        Return True
-    EndIf
+    If Not $bBoughtB And Not ShopCanLeaveUpgradePage() Then Return True
     Return $bBoughtB
 EndFunc
 
 Func _ScanAndClickBuy($sImageName, $fThreshold, $bCDOn, $iCDFactor)
+    If $g_ShopCachePage <> "" Then Return ShopRecordedScanBuy($sImageName, $fThreshold, $bCDOn, $iCDFactor)
     Local $arrMegaShopViewport = [450, 145, 750, 450]
     Local $sFullImagePath = $sGameResDir & "MazeShop\" & $sImageName
 
@@ -489,6 +663,8 @@ EndFunc
 
 Func _MazeShopScroll($sDirection = "down")
     If Not $bRunning Then Return
+    ; All registered pages fit on one screen; never scroll them out of alignment.
+    If $g_ShopCachePage <> "" Then Return
 
     Local $arrArea = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
     If @error Then Return
@@ -505,7 +681,43 @@ Func _MazeShopScroll($sDirection = "down")
     EndIf
 EndFunc
 
-Func MazeShopBuyingTypes()
+Func ShopIsVisible()
+    Local $header[4]=[80,35,250,65],$sizes[5]=[1,1.025,0.975,1.05,0.95]
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\ShopTitle.png",0.85,$header,712,$size)) Then Return True
+    Next
+    Return False
+EndFunc
+
+Func ShopTypeSelected($key,$region)
+    Local $sizes[5]=[1,1.025,0.975,1.05,0.95]
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\TypeSelected_" & $key & ".png",0.85,$region,712,$size)) Then Return True
+    Next
+    Return False
+EndFunc
+
+Func ShopCategorySelected($index,$area)
+    Local $sizes[5]=[1,1.025,0.975,1.05,0.95]
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "MazeShop\CategorySelected" & $index & ".png",0.85,$area,712,$size)) Then Return True
+    Next
+    Return False
+EndFunc
+
+Func ShopObserveVisibleDaily()
+    Local $tabs[4]=["Stop_DailyReport1Selected.png","Stop_DailyReport2Selected.png","Stop_DailyDiskSelected.png","Stop_DailyUnitSelected.png"]
+    For $i=0 To 3
+        If ShopDailyCachedFull(String($i)) Then ContinueLoop
+        Local $tab[4]=[190+145*$i,125,145,45]
+        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & $tabs[$i],0.85,$tab)) Then ContinueLoop
+        Local $counter[4]=[190,581,220,33]
+        ShopDailyRecord(String($i),MazeAreaOCR($counter,"ja*",4))
+        Return
+    Next
+EndFunc
+
+Func MazeShopBuyingTypes($category = "artifact")
     Local $fDefaultThreshold = 0.85, $bCD = False, $iCDFactor = 2
     Local $aTypes[3][5] = [ _
         ["Type_EN.png",       340, 135, 135, 35], _
@@ -513,24 +725,86 @@ Func MazeShopBuyingTypes()
         ["Type_Physical.png", 195, 135, 135, 35]  _
     ]
 
-    If MazeShopBuying() Then Return True
+    Local $typeKeys[3] = ["en", "agile", "physical"]
 
     For $i = 0 To 2
+        Local $page = $category & "." & $typeKeys[$i]
+        If ShopCacheSkipPage($page) Then ContinueLoop
         Local $arrSubArea = [$aTypes[$i][1], $aTypes[$i][2], $aTypes[$i][3], $aTypes[$i][4]]
         Local $sFullImagePath = $sGameResDir & "MazeShop\" & $aTypes[$i][0]
-        ClickImage($sFullImagePath, $fDefaultThreshold, 0, 0, $bCD, $iCDFactor, $arrSubArea)
+        If Not ShopTypeSelected($typeKeys[$i],$arrSubArea) Then
+            If Not ClickImage($sFullImagePath, $fDefaultThreshold, 0, 0, $bCD, $iCDFactor, $arrSubArea) Then
+                ShopPurchaseUncertain("upgrade tab not recognized: " & $page)
+                Return True
+            EndIf
+            Sleep(500)
+            If Not ShopTypeSelected($typeKeys[$i],$arrSubArea) Then
+                ShopPurchaseUncertain("upgrade tab did not become selected: " & $page)
+                Return True
+            EndIf
+        EndIf
+        $g_ShopCachePage = $page
         If MazeShopBuying() Then Return True
     Next
 
     Return False
 EndFunc
 
+Func ShopBuyPreferredReports()
+    Local $slot=ShopReportSlot($g_ReportPriority)
+    If $slot<0 Or Not $bRunning Then Return False
+    If ShopDailyCachedFull("0") And ShopDailyCachedFull("1") Then Return False
+    Local $category[4]=[10,215,140,75]
+    If Not ClickImage($sGameResDir & "MazeShop\Stop_DailyCategory.png",0.85,0,0,False,2,$category) Then Return False
+    Sleep(400)
+    Local $tabs[2]=["Stop_DailyReport1.png","Stop_DailyReport2.png"]
+    For $i=0 To 1
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
+        If ShopDailyCachedFull(String($i)) Then ContinueLoop
+        Local $tab[4]=[190+145*$i,125,145,45]
+        ClickImage($sGameResDir & "MazeShop\" & $tabs[$i],0.85,0,0,False,2,$tab)
+        Sleep(400)
+        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & StringReplace($tabs[$i],".png","Selected.png"),0.88,$tab)) Then ContinueLoop
+        Local $counter[4]=[190,581,220,33], $before=MazeAreaOCR($counter,"ja*",4)
+        ShopDailyRecord(String($i),$before)
+        If ShopDailyCachedFull(String($i)) Then ContinueLoop
+        Local $x=315+495*Mod($slot,2), $y=182+126*Int($slot/2), $identity[4]=[$x,$y,185,42]
+        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\ReportIdentity" & $slot & ".png",0.85,$identity)) Then ContinueLoop
+        Local $bounds=_WinAPI_GetPosWithoutShadow($sGameWinTitle)
+        If Not IsArray($bounds) Then Return True
+        Local $scale=$bounds[3]/712, $button[4]=[$x+175,$y+39,193,70]
+        Local $crop[4]=[$bounds[0]+Int($button[0]*$scale),$bounds[1]+Int($button[1]*$scale),Int($button[2]*$scale),Int($button[3]*$scale)]
+        Local $mat=_OpenCV_GetDesktopScreenMat($crop)
+        If Not IsObj($mat) Then Return True
+        ; Disabled purchase buttons are dark; require a bright pink enabled button.
+        Local $hsv=$cv.cvtColor($mat,$CV_COLOR_BGR2HSV)
+        Local $pink=$cv.countNonZero($cv.inRange($hsv,_OpenCV_Scalar(140,80,180),_OpenCV_Scalar(179,255,255)))
+        If $pink<1000*$scale*$scale Then ContinueLoop
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
+        Local $purchaseDay = ShopGameDay()
+        If MazeAreaPoint($button[0]+$button[2]/2,$button[1]+$button[3]/2) Then
+            IniWrite($g_ShopCacheFile,"daily." & $i,"Valid","0")
+            WriteLog("Shop report: requested " & $g_ReportPriority & "; tier=" & ($i+1))
+            Sleep(650)
+            If $bRunning And WinActive($sGameWinTitle) Then
+                Local $after = MazeAreaOCR($counter,"ja*",4)
+                ShopDailyRecord(String($i),$after)
+                ShopRecordReportExchange(String($i),$g_ReportPriority,$before,$after,$purchaseDay)
+            EndIf
+            Return True
+        EndIf
+    Next
+    Return False
+EndFunc
+
 Func MazeShopFarming()
+    ShopCacheBeginVisit()
+    ShopCompletionReset()
+    ShopObserveVisibleDaily()
+    If ShopBuyPreferredReports() Then Return
     Local $fDefault = 0.85, $fLow = 0.80, $bCD = False, $iCDFactor = 2, $iDelayReaction = 250
 
-    Local $arrDailyBatchArea = [1065, 135, 150, 45]
-    ClickImage($sGameResDir & "MazeShop\Daily_Batch.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrDailyBatchArea)
-    Sleep($iDelayReaction)
+    ; Do not cycle x1 into x10: it also affects subsequent upgrade pages.
 
     Local $aCates[3][5] = [ _
         ["Cate_TypeEquip.png", 10, 295, 135, 75], _
@@ -539,23 +813,106 @@ Func MazeShopFarming()
     ]
 
     For $i = 0 To 2
+        If Not $bRunning Then Return
+        If $i = 0 And ShopCacheSkipPage("equipment.en") And ShopCacheSkipPage("equipment.agile") And ShopCacheSkipPage("equipment.physical") Then ContinueLoop
+        If $i = 1 And ShopCacheSkipPage("excavate") Then ContinueLoop
+        If $i = 2 And ShopCacheSkipPage("artifact.en") And ShopCacheSkipPage("artifact.agile") And ShopCacheSkipPage("artifact.physical") Then ContinueLoop
         Local $arrSubArea = [$aCates[$i][1], $aCates[$i][2], $aCates[$i][3], $aCates[$i][4]]
         Local $sFullImagePath = $sGameResDir & "MazeShop\" & $aCates[$i][0]
-        ClickImage($sFullImagePath, $fDefault, 0, 0, $bCD, $iCDFactor, $arrSubArea)
-        Local $bStatus = ($i = 1) ? MazeShopBuying() : MazeShopBuyingTypes()
+        If Not ShopCategorySelected($i,$arrSubArea) Then
+            If Not ClickImage($sFullImagePath, $fDefault, 0, 0, $bCD, $iCDFactor, $arrSubArea) Then
+                ShopPurchaseUncertain("upgrade category not recognized: " & $aCates[$i][0])
+                Return
+            EndIf
+            Sleep(500)
+        EndIf
+        $g_ShopCachePage = ($i = 1) ? "excavate" : ""
+        Local $bStatus = ($i = 1) ? MazeShopBuying() : MazeShopBuyingTypes(($i = 0) ? "equipment" : "artifact")
         If $bStatus Then Return
     Next
 
+    If ShopStopIfExhausted() Then Return
     _MazeShopAbort($fLow, $bCD, $iCDFactor)
+EndFunc
+
+; Check daily limits only when every upgrade page is a MAX candidate.
+; Return -1 on uncertainty, 0 when purchases remain, 1 when all four caps are reached.
+Func ShopDailyExhausted()
+    If ShopDailyCachedFull("0") And ShopDailyCachedFull("1") And ShopDailyCachedFull("2") And ShopDailyCachedFull("3") Then Return 1
+    Local $category[4] = [10, 215, 140, 75]
+    If Not $bRunning Then Return -1
+    If Not ClickImage($sGameResDir & "MazeShop\Stop_DailyCategory.png", 0.85, 0, 0, False, 2, $category) Then Return -1
+    Sleep(500)
+    Local $tabs[4] = ["Stop_DailyReport1.png", "Stop_DailyReport2.png", "Stop_DailyDisk.png", "Stop_DailyUnit.png"]
+    For $i = 0 To 3
+        If ShopDailyCachedFull(String($i)) Then ContinueLoop
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
+        Local $tab[4] = [190+145*$i, 125, 145, 45]
+        If Not ClickImage($sGameResDir & "MazeShop\" & $tabs[$i], 0.85, 0, 0, False, 2, $tab) Then
+            If $i <> 0 Then Return -1
+            If Not IsArray(ImageSearch($sGameResDir & "MazeShop\Stop_DailyReport1Selected.png", 0.85, $tab)) Then Return -1
+        EndIf
+        Sleep(500)
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
+        Local $selected = StringReplace($tabs[$i], ".png", "Selected.png")
+        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & $selected, 0.88, $tab)) Then Return -1
+        Local $counter[4] = [190, 581, 220, 33]
+        Local $reading = MazeAreaOCR($counter, "ja*", 4)
+        ShopDailyRecord(String($i), $reading)
+        Local $first = ShopCompletionParseCounter($reading)
+        If $first <> 1 Then Return $first
+        ; Two fresh readings are required before treating a daily page as exhausted.
+        Sleep(250)
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
+        Local $second = MazeAreaOCR($counter, "ja*", 4)
+        If ShopCompletionParseCounter($second) <> 1 Then
+            IniWrite($g_ShopCacheFile,"daily." & $i,"Valid","0")
+            Return -1
+        EndIf
+        ShopDailyRecord(String($i), $second)
+    Next
+    Return 1
+EndFunc
+
+Func ShopStopIfExhausted()
+    If Not $bRunning Then Return True
+    Local $upgrades = ShopCompletionUpgradeState()
+    If $upgrades = 0 Then Return False
+    $g_ShopDailyForceLive = ($upgrades = 2)
+    Local $daily = ShopDailyExhausted()
+    $g_ShopDailyForceLive = False
+    If Not $bRunning Then Return True
+    If $daily = 0 Then Return False
+    If $daily = -1 Then
+        WriteLog("Shop completion uncertain: daily counters could not be verified.")
+        ActionStop()
+        GUICtrlSetData($lblStatus, "Shop: Check limit")
+        Return True
+    EndIf
+    If $upgrades = 1 Then
+        ; Cached MAX is only a candidate. Repeat with all seven pages inspected live.
+        $g_ShopCacheFullReview = True
+        WriteLog("Shop completion candidate: reviewing every upgrade page before stopping.")
+        Return True
+    EndIf
+    WriteLog("Shop exhausted: all upgrade pages MAX and all daily purchase caps reached.")
+    _MazeShopAbort(0.80, False, 2)
+    ActionStop()
+    GUICtrlSetData($lblStatus, "Shop: All done")
+    Return True
 EndFunc
 
 Func _MazeShopAbort($fThreshold, $bCD, $iCDFactor)
     Local $areaAbortBtn = [1020, 635, 195, 45]
-    ClickImage($sGameResDir & "MazeShop\AbortBtn.png", $fThreshold, 0, 0, $bCD, $iCDFactor, $areaAbortBtn)
+    If Not $bRunning Then Return False
+    If Not ClickImage($sGameResDir & "MazeShop\AbortBtn.png", $fThreshold, 0, 0, $bCD, $iCDFactor, $areaAbortBtn) Then Return False
     Local $areaAbortOK = [660, 525, 160, 45]
+    Local $timeout = TimerInit()
     While $bRunning And Not ClickImage($sGameResDir & "MazeShop\AbortOK.png", $fThreshold, 0, 0, $bCD, $iCDFactor, $areaAbortOK)
+        If TimerDiff($timeout) > 10000 Then Return False
         Sleep(500)
     WEnd
+    Return $bRunning
 EndFunc
 
 Func MazeNetworkErrored()
@@ -593,7 +950,250 @@ Func WriteLog($msg)
     FileClose($hFile)
 EndFunc
 
+; Wait for stage-unlock animations, then retry while the Start button remains.
+Func TryMainQuestStart()
+    If Not $bRunning Then Return True
+    Local $areaQuest = [781, 493, 483, 219]
+    Local $areaHeader = [70, 28, 250, 80]
+    Local $questButton = $sGameResDir & "Quest_Enter.png"
+    Local $isMainPage = IsArray(ImageSearch($sGameResDir & "MainQuest_Header.png", 0.85, $areaHeader))
+    If Not $isMainPage Then $isMainPage = IsArray(ImageSearch($questButton, 0.85, $areaQuest))
+    If Not $isMainPage Then $isMainPage = IsArray(ImageSearch($sGameResDir & "Quest_Scene.png", 0.85, $areaQuest))
+    If Not $bRunning Then Return True
+    If Not $isMainPage Then
+        ; Brief animation flashes must not restart the full waiting interval.
+        If $hQuestStartVisible <> 0 And $hQuestPageLastSeen <> 0 And TimerDiff($hQuestPageLastSeen) > 2000 Then
+            $hQuestStartVisible = 0
+            $hQuestPageLastSeen = 0
+            GUICtrlSetData($lblStatus, "  Status: Running ")
+            WriteLog("Main quest: page no longer visible.")
+        EndIf
+        Return False
+    EndIf
+    $hQuestPageLastSeen = TimerInit()
+
+    If $hQuestStartVisible = 0 Then
+        $hQuestStartVisible = TimerInit()
+        GUICtrlSetData($lblStatus, " Quest: Waiting  ")
+        WriteLog("Main quest: page found; waiting for unlock animation.")
+        Return True
+    EndIf
+    Local $elapsed = TimerDiff($hQuestStartVisible)
+    If $elapsed < $iQuestStartWaitMs Then Return True
+    ; Story nodes share the main-page header. Do not block their action behind Start.
+    $questButton = MainQuestActionTemplate($areaQuest)
+    If Not $bRunning Then Return True
+    If $questButton = "" Then
+        GUICtrlSetData($lblStatus, "Quest: Find action")
+        Return True
+    EndIf
+    WriteLog("Main quest: wait elapsed=" & Int($elapsed) & "; active=" & (WinActive($sGameWinTitle) <> 0))
+
+    If ClickMainQuestStartTwice($questButton, $areaQuest, $areaHeader) Then
+        ShopDailyInvalidate() ; Story progression may change daily exchange allowances.
+        If Not $bRunning Then Return True
+        WriteLog("Main quest: Start click sequence sent; retry if still visible.")
+        $hQuestStartVisible = TimerInit()
+        GUICtrlSetData($lblStatus, " Quest: Starting ")
+    Else
+        If Not $bRunning Then Return True
+        WriteLog("Main quest: click not sent; will retry.")
+        ; Retry matching later without resetting the animation wait.
+        GUICtrlSetData($lblStatus, " Quest: Find Start")
+    EndIf
+    Return True
+EndFunc
+
+Func MainQuestActionTemplate($areaQuest)
+    Local $actions[2] = ["Quest_Scene.png", "Quest_Enter.png"]
+    Local $scales[3] = [1, 1.025, 1.05]
+    For $action In $actions
+        For $scale In $scales
+            If Not $bRunning Then Return ""
+            If IsArray(ImageSearch($sGameResDir & $action, 0.90, $areaQuest, 712, $scale)) Then Return $sGameResDir & $action
+        Next
+    Next
+    Return ""
+EndFunc
+
+Func ClickMainQuestButton($questButton, $areaQuest)
+    Local $scales[3] = [1, 1.025, 1.05]
+    For $scale In $scales
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+        If ClickImage($questButton, 0.90, 0, 0, False, 2, $areaQuest, 712, $scale) Then
+            WriteLog("Main quest: action=" & $questButton & "; template scale=" & $scale)
+            Return True
+        EndIf
+    Next
+    Return False
+EndFunc
+
+Func ClickMainQuestStartTwice($questButton, $areaQuest, $areaHeader)
+    If Not $bRunning Then Return False
+    If Not WinActive($sGameWinTitle) Then
+        WriteLog("Main quest: game lost focus before click.")
+        Return False
+    EndIf
+    If Not ClickMainQuestButton($questButton, $areaQuest) Then
+        WriteLog("Main quest: button not matched during click capture.")
+        Return False
+    EndIf
+    Sleep(250)
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
+    ; Re-identify the main page and the button after the first click.
+    If Not IsArray(ImageSearch($sGameResDir & "MainQuest_Header.png", 0.85, $areaHeader)) Then Return True
+    Local $loading[4] = [585, 335, 95, 75]
+    If IsArray(ImageSearch($sGameResDir & "Game_Loading.png", 0.85, $loading)) Then Return True
+    If ClickMainQuestButton($questButton, $areaQuest) Then WriteLog("Main quest: button still visible; second click sent.")
+    Return True
+EndFunc
+
+; A received-reward popup can overlay the story or quest page. Handle it first.
+Func TryReceivedReward()
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+    Local $messageArea[4] = [450, 145, 370, 70]
+    If Not IsArray(ImageSearch($sGameResDir & "Reward_Received.png", 0.90, $messageArea)) Then Return False
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
+    Local $okArea[4] = [500, 600, 260, 90]
+    If ClickImage($sGameResDir & "Reward_OK.png", 0.90, 0, 0, False, 2, $okArea) Then
+        WriteLog("Reward: acknowledged already-received rewards.")
+        ActionPause(700)
+    EndIf
+    Return True
+EndFunc
+
+; Prefer the confirmed ore-income relic before the legacy middle-card fallback.
+; Count only the upcoming column's reward icons, never inventory or preview icons.
+Func MazeRouteDiamonds($region)
+    Local $bounds = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
+    If Not IsArray($bounds) Then Return -1
+    Local $scale = $bounds[3]/712
+    Local $crop[4] = [$bounds[0]+Int($region[0]*$scale), $bounds[1]+Int($region[1]*$scale), Int($region[2]*$scale), Int($region[3]*$scale)]
+    Local $scene = _OpenCV_GetDesktopScreenMat($crop)
+    Local $templ = _OpenCV_imread_and_check($sGameResDir & "Maze_RouteDiamond.png")
+    If Not IsObj($scene) Or Not IsObj($templ) Then Return -1
+    Local $sizes[5] = [1, 1.025, 1.05, 0.975, 0.95], $best = 0
+    For $size In $sizes
+        Local $sized = _AssistResize($cv, $templ, Int($templ.width*$scale*$size), Int($templ.height*$scale*$size))
+        If Not IsObj($sized) Then Return -1
+        Local $matches = _OpenCV_FindTemplate($scene, $sized, 0.88)
+        If IsArray($matches) Then
+            If UBound($matches) > $best Then $best = UBound($matches)
+        EndIf
+    Next
+    Return $best
+EndFunc
+
+Func TryMazeOreRoute()
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+    Local $heading[4] = [490, 0, 300, 110], $sizes[5] = [1, 1.025, 1.05, 0.975, 0.95], $found = False
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "Maze_RouteTitle.png", 0.85, $heading, 712, $size)) Then
+            $found = True
+            ExitLoop
+        EndIf
+    Next
+    If Not $found Then
+        $g_RouteSelectAttempts = 0
+        Return False
+    EndIf
+    Local $upper[4] = [435, 165, 165, 100], $lower[4] = [435, 470, 165, 100]
+    Local $top = MazeRouteDiamonds($upper), $bottom = MazeRouteDiamonds($lower)
+    If $top < 0 Or $bottom < 0 Or $top > 3 Or $bottom > 3 Or $top = $bottom Then Return False
+    Local $y = ($bottom > $top) ? 465 : 160
+    ; Center SELECT can also appear under the pointer. Use it only after our
+    ; branch click and pause; the arrow remains valid for an already-selected node.
+    Local $selected[4] = [370, $y-105, 230, 65], $center[4] = [400, $y-30, 155, 90]
+    For $size In $sizes
+        Local $confirmed = IsArray(ImageSearch($sGameResDir & "Maze_RouteSelected.png", 0.80, $selected, 712, $size))
+        If $g_RouteSelectAttempts > 0 Then
+            If IsArray(ImageSearch($sGameResDir & "Maze_RouteCenterSelect.png", 0.85, $center, 712, $size)) Then $confirmed = True
+        EndIf
+        If $confirmed Then
+            $g_RouteSelectAttempts = 0
+            WriteLog("Maze route: selection verified; continuing to route confirmation.")
+            Return False ; The normal route-confirm handler may now proceed.
+        EndIf
+    Next
+    If $g_RouteSelectAttempts >= 3 Then
+        WriteLog("Maze route: cannot verify selection after three clicks; stopped.")
+        ActionStop()
+        $g_RouteSelectAttempts = 0
+        Return True
+    EndIf
+    If MazeAreaPoint(460, $y) Then
+        $g_RouteSelectAttempts += 1
+        WriteLog("Maze route: diamonds top=" & $top & "; bottom=" & $bottom & "; selected=" & (($bottom > $top) ? "bottom" : "top"))
+        ActionPause(700)
+    EndIf
+    Return True
+EndFunc
+
+Func TryMazeOreEvent()
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+    Local $heading[4] = [560, 60, 240, 110], $options[4] = [580, 400, 650, 240]
+    Local $sizes[5] = [1, 1.025, 1.05, 0.975, 0.95], $found = False
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "Maze_EventAcid.png", 0.88, $heading, 712, $size)) Then
+            $found = True
+            ExitLoop
+        EndIf
+    Next
+    If Not $found Then Return False
+    For $size In $sizes
+        If ClickImage($sGameResDir & "Maze_EventPickOre.png", 0.88, 0, 0, False, 2, $options, 712, $size) Then
+            WriteLog("Maze event: selected pick up Tatsumiya ore in acid swamp.")
+            ActionPause(1200)
+            Return True
+        EndIf
+    Next
+    ; Never let the generic event click choose escape while this event is visible.
+    ActionPause(500)
+    Return True
+EndFunc
+
+Func TryMazeOreRelic()
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+    Local $titleArea[4] = [480, 0, 320, 110], $cards[4] = [120, 200, 1020, 180]
+    Local $sizes[5] = [1, 0.975, 1.025, 0.95, 1.05], $foundTitle = False
+    For $size In $sizes
+        If IsArray(ImageSearch($sGameResDir & "Maze_RelicTitle.png", 0.85, $titleArea, 712, $size)) Then
+            $foundTitle = True
+            ExitLoop
+        EndIf
+    Next
+    If Not $foundTitle Then Return False
+    For $size In $sizes
+        If ClickImage($sGameResDir & "Maze_OreCore.png", 0.88, 0, 0, False, 2, $cards, 712, $size) Then
+            WriteLog("Maze relic: preferred Tatsumiya Core (battle ore income).")
+            ActionPause(1200)
+            Return True
+        EndIf
+    Next
+    Return False
+EndFunc
+
+Func TryStoryTapContinue()
+    If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+    Local $prompt = StoryContinueRect()
+    If IsArray($prompt) Then
+        Local $bounds = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
+        If Not IsArray($bounds) Or Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
+        ClickRelateWindow($bounds, $prompt)
+        WriteLog("Story: tapped the continue prompt.")
+        ActionPause(1200)
+        Return True
+    EndIf
+    Return False
+EndFunc
+
 ; Looped Function
+Func AutoClickTick()
+    AdlibUnRegister("AutoClickTick")
+    AutoClick()
+    If $bRunning Then AdlibRegister("AutoClickTick", $iLoopTimer)
+EndFunc
+
 Func AutoClick()
     If Not $bRunning Or $bSingleRunning Then Return
 
@@ -612,9 +1212,16 @@ Func AutoClick()
     EndIf
 
     Local $aNativePos = WinGetPos($sGameWinTitle)
-    if $aNativePos[2] <> 1280 And $aNativePos[3] <> 720 Then
+    If Not IsArray($aNativePos) Then
+        Return
+    EndIf
+    If BitAND(WinGetState($sGameWinTitle), 16) Then
+        Return
+    EndIf
+    if $aNativePos[2] <> 1280 Or $aNativePos[3] <> 720 Then
         GUICtrlSetData($lblStatus, "  Status: Resized ")
         WinMove($sGameWinTitle, "", Default, Default, 1280, 720)
+        Return ; Let the window finish resizing before the next capture.
     EndIf
 
     Local $hTimer = $bWriteLogOn ? TimerInit() : 0
@@ -631,17 +1238,32 @@ Func AutoClick()
     EndIf
 
     Local $arrCircleHard = [828, 513, 155, 55]
+    If TryReceivedReward() Then Return
+    If TryStoryTapContinue() Then Return
+    If TryStoryUI() Then Return
+    ; Reserve this screen for the quest handler until its button disappears.
+    If TryMainQuestStart() Then Return
+    If MazeAreaHandle() Then Return
+    If ShopIsVisible() Then
+        If $bMazeFarmingOn Then
+            $bSingleRunning = True
+            MazeShopFarming()
+            $bSingleRunning = False
+        EndIf
+        Return
+    EndIf
     ClickImage($sGameResDir & "Circle_Hard.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrCircleHard)
 
     Local $arrRB = [781, 493, 483, 219]
+    If TryMazeOreRoute() Then Return
     If ClickImage($sGameResDir & "Maze_Ready.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrRB) Or _
-       ClickImage($sGameResDir & "Maze_Route.png", $fLow - 0.05, 0, 0, $bCD, $iCDFactor, $arrRB) Or _
-       ClickImage($sGameResDir & "Quest_Enter.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrRB) Then
+       ClickImage($sGameResDir & "Maze_Route.png", $fLow - 0.05, 0, 0, $bCD, $iCDFactor, $arrRB) Then
+        ShopCacheEndVisit()
         ActionPause(2500)
         Return
     EndIf
 
-    Local $aSingleClicks[7] = ["Maze_Enter.png", "Maze_NoHelper.png", "Maze_DeHelper.png", "Sim_Enter.png", "Com_Battle.png", "Com_Continue.png", "Quest_Scene.png"]
+    Local $aSingleClicks[6] = [ "Maze_NoHelper.png", "Maze_DeHelper.png", "Sim_Enter.png", "Com_Battle.png", "Com_Continue.png", "Quest_Scene.png"]
     For $img In $aSingleClicks
         ClickImage($sGameResDir & $img, $fDefault, 0, 0, $bCD, $iCDFactor, $arrRB)
     Next
@@ -657,7 +1279,7 @@ Func AutoClick()
     EndIf
     ClickImage($sGameResDir & "Com_SkipBattle.png", $fLow, 0, 0, $bCD, $iCDFactor, $arrRU)
     ClickImage($sGameResDir & "Com_SkipLight.png", $fLow, 0, 0, $bCD, $iCDFactor, $arrRU)
-    ClickImage($sGameResDir & "Maze_Shop.png", $fHigh, -50, 570, $bCD, $iCDFactor, $arrRU)
+    ; A small zero glyph also matches amounts ending in 0. Never use it to exit.
 
     Local $arrGachaTitleArea = [84, 52, 120, 43]
     ClickImage($sGameResDir & "Gacha_Title.png", $fDefault, -90, 0, $bCD, $iCDFactor, $arrGachaTitleArea)
@@ -675,6 +1297,7 @@ Func AutoClick()
     EndIf
 
     Local $arrM1 = [543, 131, 185, 68]
+    If TryMazeOreRelic() Then Return
     ClickImage($sGameResDir & "Maze_SelRelic.png", $fDefault, 0, 150, $bCD, $iCDFactor, $arrM1)
     ClickImage($sGameResDir & "Maze_SelRelic200.png", $fDefault, 0, 150, $bCD, $iCDFactor, $arrM1)
 
@@ -692,6 +1315,7 @@ Func AutoClick()
     Local $arrNotCraftArea = [864, 626, 149, 39]
     Local $arrNotCraftOKArea = [643, 524, 190, 50]
     ClickImage($sGameResDir & "Maze_Trans.png", $fDefault, 960, 240, $bCD, $iCDFactor, $arrTransArea)
+    If TryMazeOreEvent() Then Return
     ClickImage($sGameResDir & "Maze_EvOpts.png", $fDefault, -50, -25, $bCD, $iCDFactor, $arrEvOptsArea)
 
     If $bMazeCraftSkip Then
@@ -725,37 +1349,11 @@ Func AutoClick()
         GUICtrlSetData($lblStatus, "  Quest: Clear    ")
         Return
     EndIf
-    If IsArray(ImageSearch($sGameResDir & "ADV_Menu.png", $fDefault, $arrRU)) Then
-        ActionStop()
-        GUICtrlSetData($lblStatus, "  Status: InMenu  ")
-        Return
-    EndIf
 
     Local $arrShopDoneCancelArea = [433, 526, 192, 47]
     If $bMazeFarmingOn Then
         ClickImage($sGameResDir & "MazeShop\AbortCancel.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrShopDoneCancelArea)
     EndIf
-    Local $iTimerReaction = 500
-    Local $arrDailyUnitArea = [630, 135, 135, 35]
-    If ClickImage($sGameResDir & "MazeShop\Daily_Unit.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrDailyUnitArea) Then
-        $bSingleRunning = True
-        Sleep($iTimerReaction)
-        If Not $bRunning Then
-            $bSingleRunning = False
-            Return
-        EndIf
-
-        Local $arrDailyClearArea = [315, 580, 70, 35]
-        If IsArray(ImageSearch($sGameResDir & "MazeShop\Daily_Clear.png", $fLow, $arrDailyClearArea)) Then
-            If $bMazeFarmingOn Then
-                MazeShopFarming()
-            Else
-                _MazeShopAbort($fLow, $bCD, $iCDFactor)
-            EndIf
-        EndIf
-        $bSingleRunning = False
-    EndIf
-
     If $bWriteLogOn Then
         WriteLog("AutoClick: " & TimerDiff($hTimer) & " ms")
     EndIf
