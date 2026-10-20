@@ -20,12 +20,12 @@ The UI templates use the original 1264 x 712 window reference. Scaling is suppor
 
 ## Limits and verification
 
-This is an experimental snapshot, not a fully validated release. End-to-end shop purchasing still needs further live validation, including reported cases where upgrades are missed. The ore selector recognizes specific templates; it does not rank every multiplier or percentage bonus or optimize the entire route graph. Some area numbers depend on OCR; direct templates currently include 100, 130 and 190. The 190 template avoids the observed Windows OCR misreading of its stylized digits. Unknown UI states can require manual intervention.
+This is an experimental snapshot, not a fully validated release. End-to-end shop purchasing still needs further live validation, including reported cases where upgrades are missed. The ore selector recognizes specific templates; it does not rank every multiplier or percentage bonus or optimize the entire route graph. Some area numbers depend on OCR; direct templates currently include 100, 130, 190 and 200. Numeric `Maze_Area<number>.png` templates are discovered automatically; unseen numbers still rely on OCR. The 190 template avoids the observed Windows OCR misreading of its stylized digits. Unknown UI states can require manual intervention.
 
 The offline test `Tests/ShopDetails.au3` covers fresh cache initialization, preservation of existing settings, the JST reset boundary, daily remaining counters, per-area caps, invalidation after purchase attempts, and attribute mapping. Run it with the 64-bit AutoIt interpreter; it does not operate the game. A zero exit code indicates success. Run Au3Check on `Game_MuvLuv.au3` for syntax checking.
 
 The upstream license and notices are preserved. Game UI crops are recognition templates from the game, as in the upstream project.
 
-The offline test `Tests/MazeAreaTemplates.au3` uses a saved area-number crop to check 190 at three scales, distinguish 100/130, and reject unrelated or conflicting matches. It does not operate the game.
+The offline test `Tests/MazeAreaTemplates.au3` uses a saved area-number crop to check 190 and 200 at three scales, distinguish 100/130, and reject unrelated or conflicting matches. It does not operate the game.
 
 Shop type tabs use their filled blue background rather than cursor-contaminated text templates. Tab switches wait for two selected observations within three seconds and retry once if needed. `Tests/ShopTabState.au3` checks all three selected states and their unselected neighbors at three scales, including overlapping cursors. An unverified tab still stops the assistant instead of buying on the wrong page.

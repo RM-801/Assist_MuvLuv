@@ -7,11 +7,14 @@ _OpenCV_Open($root & "Libs\opencv\build\x64\vc16\bin\opencv_world4120.dll", $roo
 Global $cv = _OpenCV_get(), $screen = 0, $scale = 1, $forceAmbiguous = False
 If Not IsObj($cv) Then Exit 1
 Local $region[4] = [0, 0, 270, 90], $scales[3] = [1, 0.9, 1.25]
-Local $source = _OpenCV_imread_and_check(@ScriptDir & "\Fixtures\Maze_Area190.png")
-For $i = 0 To UBound($scales)-1
-    $scale = $scales[$i]
-    $screen = _AssistResize($cv, $source, Int($source.width*$scale), Int($source.height*$scale))
-    If MazeAreaTemplateNumber($region, $root & "Games\MuvLuv\") <> 190 Then Exit 2+$i
+Local $capturedAreas[2] = [190, 200]
+For $expected In $capturedAreas
+    Local $source = _OpenCV_imread_and_check(@ScriptDir & "\Fixtures\Maze_Area" & $expected & ".png")
+    For $i = 0 To UBound($scales)-1
+        $scale = $scales[$i]
+        $screen = _AssistResize($cv, $source, Int($source.width*$scale), Int($source.height*$scale))
+        If MazeAreaTemplateNumber($region, $root & "Games\MuvLuv\") <> $expected Then Exit 2+$i
+    Next
 Next
 $scale = 1
 Local $oldAreas[2] = [100, 130]
@@ -23,7 +26,7 @@ $screen = _OpenCV_imread_and_check($root & "Games\MuvLuv\Maze_AreaSelect.png")
 If MazeAreaTemplateNumber($region, $root & "Games\MuvLuv\") <> 0 Then Exit 7
 $forceAmbiguous = True
 If MazeAreaTemplateNumber($region, $root & "Games\MuvLuv\") <> 0 Then Exit 8
-ConsoleWrite("PASS: captured 190 at three scales; 100/130 stay distinct; unrelated and conflicting matches rejected." & @CRLF)
+ConsoleWrite("PASS: captured 190/200 at three scales; 100/130 stay distinct; unrelated and conflicting matches rejected." & @CRLF)
 _OpenCV_Close()
 Exit 0
 
