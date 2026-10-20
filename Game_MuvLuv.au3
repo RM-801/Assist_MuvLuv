@@ -12,6 +12,7 @@
 #include "Libs\ShopDetails.au3"
 #include "Libs\ShopCompletion.au3"
 #include "Libs\ShopTabState.au3"
+#include "Libs\MazeProgression.au3"
 
 If Not ShopCacheInitialize() Then
     MsgBox(16, "Shop settings", "Cannot initialize Data\MazeShop.ini. Check the default layout file and folder permissions.")
@@ -76,7 +77,7 @@ EndFunc
 ; The font and size.
 Local $sFont = "Segoe UI"
 Local $iFontSize = 10
-Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(355 * $iWinScale)
+Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(420 * $iWinScale)
 
 Local $hGUI = GUICreate("MuvLuv Auto", $iGUIWidth, $iGUIHeight)
 GUISetFont($iFontSize, $FW_NORMAL, 0, $sFont)
@@ -143,7 +144,7 @@ Local $chkCraftSkipText = GUICtrlCreateLabel("Skip Crafting in Maze", $iChkCraft
 GUICtrlSetState($chkCraftSkip, $GUI_CHECKED)
 _RegisterThemeCtrl($chkCraftSkipText)
 
-Local $areaLabel = GUICtrlCreateLabel("Target area", Int(20*$iWinScale), Int(168*$iWinScale), Int(125*$iWinScale), Int(24*$iWinScale))
+Local $areaLabel = GUICtrlCreateLabel("Start / farm area", Int(20*$iWinScale), Int(168*$iWinScale), Int(125*$iWinScale), Int(24*$iWinScale))
 _RegisterThemeCtrl($areaLabel)
 Global $inpArea = GUICtrlCreateInput(IniRead($g_ShopCacheFile, "Settings", "TargetArea", "100"), Int(155*$iWinScale), Int(165*$iWinScale), Int(70*$iWinScale), Int(25*$iWinScale))
 Local $reportLabel = GUICtrlCreateLabel("スキルレポート優先属性", Int(20*$iWinScale), Int(198*$iWinScale), Int(220*$iWinScale), Int(20*$iWinScale))
@@ -153,6 +154,15 @@ Local $savedReportPriority = IniRead($g_ShopCacheFile,"Settings","ReportPriority
 ; Preserve any selected attribute; normalize legacy/default labels for display.
 If ShopReportSlot($savedReportPriority) < 0 Then $savedReportPriority = "指定なし"
 GUICtrlSetData($cmbReportPriority, "指定なし|アグレッシブ|スマート|シャイ|キュート|コミカル|クレバー", $savedReportPriority)
+
+Global $chkMazeAdvance = GUICtrlCreateCheckbox("Auto advance areas", Int(20*$iWinScale), Int(250*$iWinScale), Int(215*$iWinScale), Int(24*$iWinScale))
+If IniRead($g_ShopCacheFile,"Settings","AutoAdvance","0") = "1" Then GUICtrlSetState($chkMazeAdvance,$GUI_CHECKED)
+_RegisterThemeCtrl($chkMazeAdvance)
+Local $advanceLimitLabel = GUICtrlCreateLabel("Stop at (0 = none)", Int(20*$iWinScale), Int(283*$iWinScale), Int(130*$iWinScale), Int(24*$iWinScale))
+_RegisterThemeCtrl($advanceLimitLabel)
+Global $inpAdvanceLimit = GUICtrlCreateInput(IniRead($g_ShopCacheFile,"Settings","AdvanceLimit","0"),Int(155*$iWinScale),Int(280*$iWinScale),Int(70*$iWinScale),Int(25*$iWinScale))
+GUICtrlSetTip($chkMazeAdvance,"Clear successive areas. Start from the Maze entry page. Stops on defeat or an unavailable next area.")
+GUICtrlSetTip($inpAdvanceLimit,"Finish this area, then stop. 0 keeps advancing while the next area is available.")
 
 #include "Libs\MazeArea.au3"
 #include "Libs\StoryUI.au3"
@@ -279,6 +289,21 @@ Func ActionStart()
         Return
     EndIf
     $g_TargetArea = Int($requested)
+    $g_MazeAdvance = (GUICtrlRead($chkMazeAdvance) = $GUI_CHECKED)
+    Local $limit = StringStripWS(GUICtrlRead($inpAdvanceLimit),3)
+    If Not StringRegExp($limit,"^(0|[1-9][0-9]{0,2})$") Then
+        MsgBox(48,"Stop area","Enter 0 for no limit, or an area ID from 1 to 999.")
+        Return
+    EndIf
+    $g_MazeAdvanceLimit = Int($limit)
+    If $g_MazeAdvance And $g_MazeAdvanceLimit > 0 And $g_MazeAdvanceLimit < $g_TargetArea Then
+        MsgBox(48,"Stop area","The stop area must be at or above the start area.")
+        Return
+    EndIf
+    MazeProgressReset()
+    $g_AreaSelectAttempts = 0
+    IniWrite($g_ShopCacheFile,"Settings","AutoAdvance",Int($g_MazeAdvance))
+    IniWrite($g_ShopCacheFile,"Settings","AdvanceLimit",$g_MazeAdvanceLimit)
     $g_ShopDetectedArea = 0
     $g_AreaSteps = 0
     $g_AreaLastRows = ""
@@ -291,6 +316,9 @@ Func ActionStart()
     GUICtrlSetData($lblStatus, "  Status: Running ")
     GUICtrlSetColor($lblStatus, 0x00FF00)
     $bRunning = True
+    GUICtrlSetState($chkMazeAdvance,$GUI_DISABLE)
+    GUICtrlSetState($inpAdvanceLimit,$GUI_DISABLE)
+    GUICtrlSetState($inpArea,$GUI_DISABLE)
     AdlibRegister("AutoClickTick", $iLoopTimer)
 EndFunc
 
@@ -301,6 +329,10 @@ Func ActionStop()
     GUICtrlSetData($lblStatus, "  Status: Idle    ")
     GUICtrlSetColor($lblStatus, 0xFFFFFF)
     $bRunning = False
+    MazeProgressReset()
+    GUICtrlSetState($chkMazeAdvance,$GUI_ENABLE)
+    GUICtrlSetState($inpAdvanceLimit,$GUI_ENABLE)
+    GUICtrlSetState($inpArea,$GUI_ENABLE)
     ResetPausingState()
     AdlibUnRegister("AutoClickTick")
 EndFunc
@@ -903,6 +935,8 @@ EndFunc
 
 Func ShopStopIfExhausted()
     If Not $bRunning Then Return True
+    ; Exhausted upgrades/daily exchanges end farming, not a progression run.
+    If $g_MazeAdvance Then Return False
     Local $upgrades = ShopCompletionUpgradeState()
     If $upgrades = 0 Then Return False
     $g_ShopDailyForceLive = ($upgrades = 2)
@@ -939,6 +973,7 @@ Func _MazeShopAbort($fThreshold, $bCD, $iCDFactor)
         If TimerDiff($timeout) > 10000 Then Return False
         Sleep(500)
     WEnd
+    If $bRunning Then MazeProgressExited()
     Return $bRunning
 EndFunc
 
@@ -1264,6 +1299,14 @@ Func AutoClick()
         Return
     EndIf
 
+    ; Inspect defeat before generic battle/continue clicks can dismiss it.
+    Local $failureArea[4] = [781,493,483,219]
+    If $g_MazeAdvance And IsArray(ImageSearch($sGameResDir & "Com_TryAgain.png",$fDefault,$failureArea)) Then
+        ActionStop()
+        GUICtrlSetData($lblStatus,"Battle: Failed")
+        Return
+    EndIf
+
     Local $arrCircleHard = [828, 513, 155, 55]
     If TryReceivedReward() Then Return
     If TryStoryTapContinue() Then Return
@@ -1272,7 +1315,11 @@ Func AutoClick()
     If TryMainQuestStart() Then Return
     If MazeAreaHandle() Then Return
     If ShopIsVisible() Then
-        If $bMazeFarmingOn Then
+        If Not MazeProgressShop() Then
+            MazeAreaFail("Auto advance needs an observed run. Return to the Maze entry page and press Start.")
+            Return
+        EndIf
+        If $bMazeFarmingOn Or $g_MazeAdvance Then
             $bSingleRunning = True
             MazeShopFarming()
             $bSingleRunning = False
@@ -1285,6 +1332,7 @@ Func AutoClick()
     If TryMazeOreRoute() Then Return
     If ClickImage($sGameResDir & "Maze_Ready.png", $fDefault, 0, 0, $bCD, $iCDFactor, $arrRB) Or _
        ClickImage($sGameResDir & "Maze_Route.png", $fLow - 0.05, 0, 0, $bCD, $iCDFactor, $arrRB) Then
+        MazeProgressExploring()
         ShopCacheEndVisit()
         ActionPause(2500)
         Return

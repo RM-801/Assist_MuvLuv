@@ -1,7 +1,9 @@
 ﻿#include-once
 #include "MazeAreaTemplates.au3"
 #include "MazeAreaDigits.au3"
+#include "MazeProgression.au3"
 Global $g_TargetArea = 100, $g_AreaSteps = 0, $g_AreaLastRows = "", $g_AreaStuck = 0
+Global $g_AreaSelectAttempts = 0
 
 Func MazeAreaFail($reason)
     WriteLog("Area stopped: " & $reason)
@@ -82,6 +84,8 @@ Func MazeAreaReadDigits()
 EndFunc
 
 Func MazeAreaHandle()
+    Local $candidate = MazeProgressCandidate()
+    Local $requestedArea = ($candidate > 0) ? $candidate : $g_TargetArea
     Local $dialog[4] = [450, 55, 370, 70], $entry[4] = [1000, 550, 245, 80]
     If IsArray(ImageSearch($sGameResDir & "Maze_AreaDialog.png", 0.88, $dialog)) Then
         $g_AreaSteps += 1
@@ -106,7 +110,12 @@ Func MazeAreaHandle()
             If $number = 0 Then ContinueLoop
             If $number < $min Then $min = $number
             If $number > $max Then $max = $number
-            If $number = $g_TargetArea Then
+            If $number = $requestedArea Then
+                $g_AreaSelectAttempts += 1
+                If $g_AreaSelectAttempts > 3 Then
+                    MazeAreaFail("Area " & $requestedArea & " cannot be selected. It may be locked. Progress has not advanced.")
+                    Return True
+                EndIf
                 If Not MazeAreaPoint(550, 195+Number($parts[2])+Number($parts[4])/2) Then Return True
                 Sleep(600)
                 If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
@@ -120,11 +129,20 @@ Func MazeAreaHandle()
             MazeAreaFail("Cannot read/find the target area. Check the area list and try again.")
             Return True
         EndIf
-        MazeAreaPoint(570, 450, ($g_TargetArea < $min) ? "down" : "up", MazeAreaWheelTicks($g_TargetArea, $min, $max))
+        MazeAreaPoint(570, 450, ($requestedArea < $min) ? "down" : "up", MazeAreaWheelTicks($requestedArea, $min, $max))
         ActionPause(350)
         Return True
     EndIf
     If Not IsArray(ImageSearch($sGameResDir & "Maze_Enter.png", 0.85, $entry)) Then Return False
+    If $candidate = -1 Then
+        MazeAreaFail("Exploration returned without a completed tune-up exit. Check the battle result; the area has not advanced.")
+        Return True
+    EndIf
+    If $candidate = -2 Then
+        ActionStop()
+        GUICtrlSetData($lblStatus,"Area: Limit reached")
+        Return True
+    EndIf
     $g_ShopDetectedArea = 0
     Local $numberArea[4] = [875, 230, 270, 90]
     ; Recognize composed numbers first; retain whole-number/OCR fallbacks.
@@ -147,11 +165,23 @@ Func MazeAreaHandle()
         Next
     EndIf
     If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
-    If $current = $g_TargetArea Then
+    If $current = $requestedArea Then
         $g_ShopDetectedArea = $current
         $g_AreaSteps = 0
+        $g_AreaStuck = 0
+        $g_AreaLastRows = ""
+        $g_AreaSelectAttempts = 0
+        If $candidate > 0 Then
+            ; Only an actually selected next area can advance saved progress.
+            $g_TargetArea = $current
+            GUICtrlSetData($inpArea,$current)
+            IniWrite($g_ShopCacheFile,"Settings","TargetArea",$current)
+            ShopCacheEndVisit()
+            ShopDailyInvalidate()
+            WriteLog("Maze auto advance: next area verified: " & $current)
+        EndIf
         WriteLog("Maze area verified: " & $current)
-        ClickImage($sGameResDir & "Maze_Enter.png", 0.85, 0, 0, False, 2, $entry)
+        If ClickImage($sGameResDir & "Maze_Enter.png", 0.85, 0, 0, False, 2, $entry) Then MazeProgressPrepared($current)
         ActionPause(1500)
     ElseIf $g_AreaSteps > 0 And $current = 0 Then
         MazeAreaFail("Selected area's number cannot be verified. Exploration has not started.")
