@@ -11,6 +11,7 @@
 #include "Libs\MazeShopCache.au3"
 #include "Libs\ShopDetails.au3"
 #include "Libs\ShopCompletion.au3"
+#include "Libs\ShopTabState.au3"
 
 If Not ShopCacheInitialize() Then
     MsgBox(16, "Shop settings", "Cannot initialize Data\MazeShop.ini. Check the default layout file and folder permissions.")
@@ -690,10 +691,25 @@ Func ShopIsVisible()
 EndFunc
 
 Func ShopTypeSelected($key,$region)
-    Local $sizes[5]=[1,1.025,0.975,1.05,0.95]
-    For $size In $sizes
-        If IsArray(ImageSearch($sGameResDir & "MazeShop\TypeSelected_" & $key & ".png",0.85,$region,712,$size)) Then Return True
-    Next
+    If Not StringRegExp($key,"^(physical|en|agile)$") Then Return False
+    Local $bounds = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
+    If Not IsArray($bounds) Then Return False
+    Local $scale = $bounds[3]/712
+    Local $crop[4] = [$bounds[0]+Int($region[0]*$scale),$bounds[1]+Int($region[1]*$scale),Int($region[2]*$scale),Int($region[3]*$scale)]
+    Return ShopTabPixelsSelected(_OpenCV_GetDesktopScreenMat($crop), $cv)
+EndFunc
+
+Func ShopWaitForType($key, $region)
+    Local $started = TimerInit(), $stable = 0
+    While $bRunning And WinActive($sGameWinTitle) And TimerDiff($started)<3000
+        If ShopTypeSelected($key,$region) Then
+            $stable += 1
+            If $stable>=2 Then Return True
+        Else
+            $stable = 0
+        EndIf
+        Sleep(200)
+    WEnd
     Return False
 EndFunc
 
@@ -728,6 +744,7 @@ Func MazeShopBuyingTypes($category = "artifact")
     Local $typeKeys[3] = ["en", "agile", "physical"]
 
     For $i = 0 To 2
+        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
         Local $page = $category & "." & $typeKeys[$i]
         If ShopCacheSkipPage($page) Then ContinueLoop
         Local $arrSubArea = [$aTypes[$i][1], $aTypes[$i][2], $aTypes[$i][3], $aTypes[$i][4]]
@@ -737,8 +754,17 @@ Func MazeShopBuyingTypes($category = "artifact")
                 ShopPurchaseUncertain("upgrade tab not recognized: " & $page)
                 Return True
             EndIf
-            Sleep(500)
-            If Not ShopTypeSelected($typeKeys[$i],$arrSubArea) Then
+            If Not ShopWaitForType($typeKeys[$i],$arrSubArea) Then
+                ; The initial click can land while the preceding purchase animates.
+                If Not $bRunning Then Return True
+                If Not WinActive($sGameWinTitle) Then Return True
+                ClickImage($sFullImagePath, $fDefaultThreshold, 0, 0, $bCD, $iCDFactor, $arrSubArea)
+                If ShopWaitForType($typeKeys[$i],$arrSubArea) Then
+                    $g_ShopCachePage = $page
+                    If MazeShopBuying() Then Return True
+                    ContinueLoop
+                EndIf
+                If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
                 ShopPurchaseUncertain("upgrade tab did not become selected: " & $page)
                 Return True
             EndIf

@@ -27,3 +27,5 @@ The offline test `Tests/ShopDetails.au3` covers fresh cache initialization, pres
 The upstream license and notices are preserved. Game UI crops are recognition templates from the game, as in the upstream project.
 
 The offline test `Tests/MazeAreaTemplates.au3` uses a saved area-number crop to check 190 at three scales, distinguish 100/130, and reject unrelated or conflicting matches. It does not operate the game.
+
+Shop type tabs use their filled blue background rather than cursor-contaminated text templates. Tab switches wait for two selected observations within three seconds and retry once if needed. `Tests/ShopTabState.au3` checks all three selected states and their unselected neighbors at three scales, including overlapping cursors. An unverified tab still stops the assistant instead of buying on the wrong page.
