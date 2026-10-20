@@ -1,4 +1,5 @@
 ﻿#include-once
+#include "MazeAreaTemplates.au3"
 Global $g_TargetArea = 100, $g_AreaSteps = 0, $g_AreaLastRows = "", $g_AreaStuck = 0
 
 Func MazeAreaFail($reason)
@@ -115,13 +116,10 @@ Func MazeAreaHandle()
     EndIf
     If Not IsArray(ImageSearch($sGameResDir & "Maze_Enter.png", 0.85, $entry)) Then Return False
     $g_ShopDetectedArea = 0
-    Local $numberArea[4] = [875, 230, 270, 90], $current = 0
-    ; This stylized font reads as slashed O in Windows OCR. Use an observed template for 100.
-    If IsArray(ImageSearch($sGameResDir & "Maze_Area100.png", 0.96, $numberArea)) Then
-        $current = 100
-    ElseIf IsArray(ImageSearch($sGameResDir & "Maze_Area130.png", 0.96, $numberArea)) Then
-        $current = 130
-    Else
+    Local $numberArea[4] = [875, 230, 270, 90]
+    ; Windows OCR reads the stylized 190 as "1 so". Prefer verified artwork.
+    Local $current = MazeAreaTemplateNumber($numberArea, $sGameResDir)
+    If $current = 0 Then
         Local $text = MazeAreaOCR($numberArea, "en*")
         Local $lines = StringSplit(StringStripCR($text), @LF, 1)
         For $i = 1 To $lines[0]
