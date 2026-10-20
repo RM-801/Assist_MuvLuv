@@ -77,7 +77,7 @@ EndFunc
 ; The font and size.
 Local $sFont = "Segoe UI"
 Local $iFontSize = 10
-Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(420 * $iWinScale)
+Local $iGUIWidth = Int(255 * $iWinScale), $iGUIHeight = Int(450 * $iWinScale)
 
 Local $hGUI = GUICreate("MuvLuv Auto", $iGUIWidth, $iGUIHeight)
 GUISetFont($iFontSize, $FW_NORMAL, 0, $sFont)
@@ -163,8 +163,13 @@ _RegisterThemeCtrl($advanceLimitLabel)
 Global $inpAdvanceLimit = GUICtrlCreateInput(IniRead($g_ShopCacheFile,"Settings","AdvanceLimit","0"),Int(155*$iWinScale),Int(280*$iWinScale),Int(70*$iWinScale),Int(25*$iWinScale))
 GUICtrlSetTip($chkMazeAdvance,"Clear successive areas. Start from the Maze entry page. Stops on defeat or an unavailable next area.")
 GUICtrlSetTip($inpAdvanceLimit,"Finish this area, then stop. 0 keeps advancing while the next area is available.")
+Global $chkAutoHelper = GUICtrlCreateCheckbox("Auto select helper",Int(20*$iWinScale),Int(310*$iWinScale),Int(215*$iWinScale),Int(24*$iWinScale))
+If IniRead($g_ShopCacheFile,"Settings","AutoHelper","0")="1" Then GUICtrlSetState($chkAutoHelper,$GUI_CHECKED)
+_RegisterThemeCtrl($chkAutoHelper)
+GUICtrlSetTip($chkAutoHelper,"Quest preparation: select the first helper after sorting by combat power descending.")
 
 #include "Libs\MazeArea.au3"
+#include "Libs\QuestHelper.au3"
 #include "Libs\StoryUI.au3"
 ; Listen to the theme change
 GUIRegisterMsg(0x001A, "WM_SETTINGCHANGE")
@@ -271,6 +276,11 @@ While True
 WEnd
 
 ; Functions
+Func QuestHelperNotifyFailure($reason)
+    GUICtrlSetData($lblStatus,"Helper: Check")
+    MsgBox(48,"Auto select helper",$reason)
+EndFunc
+
 Func ResetPausingState()
     $bPausing = False
     $iPausingTimer = 0
@@ -301,6 +311,9 @@ Func ActionStart()
         Return
     EndIf
     MazeProgressReset()
+    QuestHelperReset()
+    $g_AutoHelper=(GUICtrlRead($chkAutoHelper)=$GUI_CHECKED)
+    IniWrite($g_ShopCacheFile,"Settings","AutoHelper",Int($g_AutoHelper))
     $g_AreaSelectAttempts = 0
     IniWrite($g_ShopCacheFile,"Settings","AutoAdvance",Int($g_MazeAdvance))
     IniWrite($g_ShopCacheFile,"Settings","AdvanceLimit",$g_MazeAdvanceLimit)
@@ -317,6 +330,7 @@ Func ActionStart()
     GUICtrlSetColor($lblStatus, 0x00FF00)
     $bRunning = True
     GUICtrlSetState($chkMazeAdvance,$GUI_DISABLE)
+    GUICtrlSetState($chkAutoHelper,$GUI_DISABLE)
     GUICtrlSetState($inpAdvanceLimit,$GUI_DISABLE)
     GUICtrlSetState($inpArea,$GUI_DISABLE)
     AdlibRegister("AutoClickTick", $iLoopTimer)
@@ -330,6 +344,8 @@ Func ActionStop()
     GUICtrlSetColor($lblStatus, 0xFFFFFF)
     $bRunning = False
     MazeProgressReset()
+    QuestHelperReset()
+    GUICtrlSetState($chkAutoHelper,$GUI_ENABLE)
     GUICtrlSetState($chkMazeAdvance,$GUI_ENABLE)
     GUICtrlSetState($inpAdvanceLimit,$GUI_ENABLE)
     GUICtrlSetState($inpArea,$GUI_ENABLE)
@@ -1311,6 +1327,7 @@ Func AutoClick()
     If TryReceivedReward() Then Return
     If TryStoryTapContinue() Then Return
     If TryStoryUI() Then Return
+    If TryQuestHelper() Then Return
     ; Reserve this screen for the quest handler until its button disappears.
     If TryMainQuestStart() Then Return
     If MazeAreaHandle() Then Return

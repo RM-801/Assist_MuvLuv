@@ -13,6 +13,7 @@ The UI templates use the original 1264 x 712 window reference. Scaling is suppor
 ## Added behavior
 
 - Main quests: wait for stage-unlock animations, retry start actions, and enter scenario stages.
+- Optional `Auto select helper`: on quest preparation, open the helper-capable slot, clear attribute/type restrictions, select combat-power sorting (`戦闘力`) and verify the downward arrow. Scroll to the top and select the first helper, verify both the roster selection and player slot, then confirm before allowing deployment. An already-selected first helper is not clicked again. No available helper slot leaves the regular formation intact. This switch is off by default, persists on Start, and is separate from the existing Maze helper handling.
 - Story scenes: expand the controls, enable fast-forward when inactive, choose the first dialogue option, and handle reward and tap-to-continue screens. No held Ctrl key is used.
 - Maze: target-area input, faster wheel navigation, and preference for visible diamond rewards, known ore relics and the ore-pickup event.
 - Maze progression: enable `Auto advance areas`, enter the first area in `Start / farm area`, and optionally set `Stop at` (0 means no configured limit). Start on the Maze entry page. After an observed run and confirmed final tune-up exit, the assistant attempts the immediately following area. Only a verified START AREA number updates the saved area. An unavailable next area, detected defeat, unexpected return, or uncertain shop state stops the assistant. Shop exhaustion does not stop progression; purchases still run even when `Enable Maze Farming` is unchecked. Disable auto advance to retain fixed-area farming.
@@ -26,6 +27,8 @@ This is an experimental snapshot, not a fully validated release. End-to-end shop
 The offline test `Tests/ShopDetails.au3` covers fresh cache initialization, preservation of existing settings, the JST reset boundary, daily remaining counters, per-area caps, invalidation after purchase attempts, and attribute mapping. Run it with the 64-bit AutoIt interpreter; it does not operate the game. A zero exit code indicates success. Run Au3Check on `Game_MuvLuv.au3` for syntax checking.
 
 `Tests/MazeProgression.au3` checks progression event sequences, duplicate shop frames, failure/reset, uncommitted candidates, configured limits and fixed farming. The next area being selectable is the final availability check; tune-up alone is not a victory detector. Live first-clear transitions and the 201+ crafting flow still need end-to-end validation. Crafting and relic preferences remain the existing settings, not a new combat optimization strategy.
+
+`Tests/QuestHelper.au3` replays the actual helper handler against screenshot control crops at three scales, replacing mouse input with recorded coordinates. It covers preparation, descending sorting, display settings, first-helper selection, confirmation, duplicate frames, disabled mode, unavailable slots and selection failures. Fixtures are neutral canvases containing only the relevant observed controls, excluding account headers. End-to-end live helper selection is still unverified.
 
 The upstream license and notices are preserved. Game UI crops are recognition templates from the game, as in the upstream project.
 
