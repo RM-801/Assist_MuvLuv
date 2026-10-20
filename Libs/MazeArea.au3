@@ -1,5 +1,6 @@
 ﻿#include-once
 #include "MazeAreaTemplates.au3"
+#include "MazeAreaDigits.au3"
 Global $g_TargetArea = 100, $g_AreaSteps = 0, $g_AreaLastRows = "", $g_AreaStuck = 0
 
 Func MazeAreaFail($reason)
@@ -71,6 +72,15 @@ Func MazeAreaParse($text, $list = False)
     Return Int($text)
 EndFunc
 
+Func MazeAreaReadDigits()
+    Local $bounds = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
+    If Not IsArray($bounds) Then Return 0
+    Local $scale = $bounds[3]/712
+    ; Wider than the old OCR crop so wide leading digits (e.g. 200) are complete.
+    Local $crop[4] = [$bounds[0]+Int(850*$scale),$bounds[1]+Int(225*$scale),Int(310*$scale),Int(100*$scale)]
+    Return MazeAreaDigitNumber(_OpenCV_GetDesktopScreenMat($crop),$cv,$sGameResDir)
+EndFunc
+
 Func MazeAreaHandle()
     Local $dialog[4] = [450, 55, 370, 70], $entry[4] = [1000, 550, 245, 80]
     If IsArray(ImageSearch($sGameResDir & "Maze_AreaDialog.png", 0.88, $dialog)) Then
@@ -117,8 +127,9 @@ Func MazeAreaHandle()
     If Not IsArray(ImageSearch($sGameResDir & "Maze_Enter.png", 0.85, $entry)) Then Return False
     $g_ShopDetectedArea = 0
     Local $numberArea[4] = [875, 230, 270, 90]
-    ; Windows OCR reads the stylized 190 as "1 so". Prefer verified artwork.
-    Local $current = MazeAreaTemplateNumber($numberArea, $sGameResDir)
+    ; Recognize composed numbers first; retain whole-number/OCR fallbacks.
+    Local $current = MazeAreaReadDigits()
+    If $current=0 Then $current = MazeAreaTemplateNumber($numberArea, $sGameResDir)
     If $current = 0 Then
         Local $text = MazeAreaOCR($numberArea, "en*")
         Local $lines = StringSplit(StringStripCR($text), @LF, 1)
