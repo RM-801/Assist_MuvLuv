@@ -736,12 +736,13 @@ EndFunc
 Func MazeShopBuyingTypes($category = "artifact")
     Local $fDefaultThreshold = 0.85, $bCD = False, $iCDFactor = 2
     Local $aTypes[3][5] = [ _
+        ["Type_Physical.png", 195, 135, 135, 35], _
         ["Type_EN.png",       340, 135, 135, 35], _
-        ["Type_Agile.png",    485, 135, 135, 35], _
-        ["Type_Physical.png", 195, 135, 135, 35]  _
+        ["Type_Agile.png",    485, 135, 135, 35]  _
     ]
 
-    Local $typeKeys[3] = ["en", "agile", "physical"]
+    ; Categories open on Physical: inspect it first, then move left to right.
+    Local $typeKeys[3] = ["physical", "en", "agile"]
 
     For $i = 0 To 2
         If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
