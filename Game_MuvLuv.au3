@@ -10,6 +10,7 @@
 #include "Libs\ImageScaleSafe.au3"
 #include "Libs\MazeShopCache.au3"
 #include "Libs\ShopDetails.au3"
+#include "Libs\ShopDailyPurchase.au3"
 #include "Libs\ShopCompletion.au3"
 #include "Libs\ShopTabState.au3"
 #include "Libs\MazeProgression.au3"
@@ -61,6 +62,8 @@ If Not IsObj($cv) Then
     Exit
 EndIf
 
+
+#include "Libs\ShopDailyUI.au3"
 
 ; The theme
 Global $bIsDark = False
@@ -825,58 +828,12 @@ Func MazeShopBuyingTypes($category = "artifact")
     Return False
 EndFunc
 
-Func ShopBuyPreferredReports()
-    Local $slot=ShopReportSlot($g_ReportPriority)
-    If $slot<0 Or Not $bRunning Then Return False
-    If ShopDailyCachedFull("0") And ShopDailyCachedFull("1") Then Return False
-    Local $category[4]=[10,215,140,75]
-    If Not ClickImage($sGameResDir & "MazeShop\Stop_DailyCategory.png",0.85,0,0,False,2,$category) Then Return False
-    Sleep(400)
-    Local $tabs[2]=["Stop_DailyReport1.png","Stop_DailyReport2.png"]
-    For $i=0 To 1
-        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
-        If ShopDailyCachedFull(String($i)) Then ContinueLoop
-        Local $tab[4]=[190+145*$i,125,145,45]
-        ClickImage($sGameResDir & "MazeShop\" & $tabs[$i],0.85,0,0,False,2,$tab)
-        Sleep(400)
-        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & StringReplace($tabs[$i],".png","Selected.png"),0.88,$tab)) Then ContinueLoop
-        Local $counter[4]=[190,581,220,33], $before=MazeAreaOCR($counter,"ja*",4)
-        ShopDailyRecord(String($i),$before)
-        If ShopDailyCachedFull(String($i)) Then ContinueLoop
-        Local $x=315+495*Mod($slot,2), $y=182+126*Int($slot/2), $identity[4]=[$x,$y,185,42]
-        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\ReportIdentity" & $slot & ".png",0.85,$identity)) Then ContinueLoop
-        Local $bounds=_WinAPI_GetPosWithoutShadow($sGameWinTitle)
-        If Not IsArray($bounds) Then Return True
-        Local $scale=$bounds[3]/712, $button[4]=[$x+175,$y+39,193,70]
-        Local $crop[4]=[$bounds[0]+Int($button[0]*$scale),$bounds[1]+Int($button[1]*$scale),Int($button[2]*$scale),Int($button[3]*$scale)]
-        Local $mat=_OpenCV_GetDesktopScreenMat($crop)
-        If Not IsObj($mat) Then Return True
-        ; Disabled purchase buttons are dark; require a bright pink enabled button.
-        Local $hsv=$cv.cvtColor($mat,$CV_COLOR_BGR2HSV)
-        Local $pink=$cv.countNonZero($cv.inRange($hsv,_OpenCV_Scalar(140,80,180),_OpenCV_Scalar(179,255,255)))
-        If $pink<1000*$scale*$scale Then ContinueLoop
-        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
-        Local $purchaseDay = ShopGameDay()
-        If MazeAreaPoint($button[0]+$button[2]/2,$button[1]+$button[3]/2) Then
-            IniWrite($g_ShopCacheFile,"daily." & $i,"Valid","0")
-            WriteLog("Shop report: requested " & $g_ReportPriority & "; tier=" & ($i+1))
-            Sleep(650)
-            If $bRunning And WinActive($sGameWinTitle) Then
-                Local $after = MazeAreaOCR($counter,"ja*",4)
-                ShopDailyRecord(String($i),$after)
-                ShopRecordReportExchange(String($i),$g_ReportPriority,$before,$after,$purchaseDay)
-            EndIf
-            Return True
-        EndIf
-    Next
-    Return False
-EndFunc
 
 Func MazeShopFarming()
     ShopCacheBeginVisit()
     ShopCompletionReset()
     ShopObserveVisibleDaily()
-    If ShopBuyPreferredReports() Then Return
+    If ShopBuyDaily() Then Return
     Local $fDefault = 0.85, $fLow = 0.80, $bCD = False, $iCDFactor = 2, $iDelayReaction = 250
 
     ; Do not cycle x1 into x10: it also affects subsequent upgrade pages.
@@ -914,37 +871,21 @@ EndFunc
 ; Return -1 on uncertainty, 0 when purchases remain, 1 when all four caps are reached.
 Func ShopDailyExhausted()
     If ShopDailyCachedFull("0") And ShopDailyCachedFull("1") And ShopDailyCachedFull("2") And ShopDailyCachedFull("3") Then Return 1
-    Local $category[4] = [10, 215, 140, 75]
-    If Not $bRunning Then Return -1
-    If Not ClickImage($sGameResDir & "MazeShop\Stop_DailyCategory.png", 0.85, 0, 0, False, 2, $category) Then Return -1
-    Sleep(500)
-    Local $tabs[4] = ["Stop_DailyReport1.png", "Stop_DailyReport2.png", "Stop_DailyDisk.png", "Stop_DailyUnit.png"]
-    For $i = 0 To 3
+    If Not ShopDailyActive() Or Not ShopDailyOpen() Then Return -1
+    For $i=0 To 3
         If ShopDailyCachedFull(String($i)) Then ContinueLoop
-        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
-        Local $tab[4] = [190+145*$i, 125, 145, 45]
-        If Not ClickImage($sGameResDir & "MazeShop\" & $tabs[$i], 0.85, 0, 0, False, 2, $tab) Then
-            If $i <> 0 Then Return -1
-            If Not IsArray(ImageSearch($sGameResDir & "MazeShop\Stop_DailyReport1Selected.png", 0.85, $tab)) Then Return -1
-        EndIf
-        Sleep(500)
-        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
-        Local $selected = StringReplace($tabs[$i], ".png", "Selected.png")
-        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & $selected, 0.88, $tab)) Then Return -1
-        Local $counter[4] = [190, 581, 220, 33]
-        Local $reading = MazeAreaOCR($counter, "ja*", 4)
-        ShopDailyRecord(String($i), $reading)
-        Local $first = ShopCompletionParseCounter($reading)
-        If $first <> 1 Then Return $first
-        ; Two fresh readings are required before treating a daily page as exhausted.
+        If Not ShopDailyActive() Or Not ShopDailySelect($i) Then Return -1
+        Local $reading=ShopDailyReadCounter(), $first=ShopCompletionParseCounter($reading)
+        ShopDailyRecord(String($i),$reading)
+        If $first<>1 Then Return $first
         Sleep(250)
-        If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return -1
-        Local $second = MazeAreaOCR($counter, "ja*", 4)
-        If ShopCompletionParseCounter($second) <> 1 Then
+        If Not ShopDailyActive() Then Return -1
+        Local $second=ShopDailyReadCounter()
+        If ShopCompletionParseCounter($second)<>1 Then
             IniWrite($g_ShopCacheFile,"daily." & $i,"Valid","0")
             Return -1
         EndIf
-        ShopDailyRecord(String($i), $second)
+        ShopDailyRecord(String($i),$second)
     Next
     Return 1
 EndFunc

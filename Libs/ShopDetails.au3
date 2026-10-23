@@ -133,3 +133,19 @@ Func ShopRecordReportExchange($key, $attribute, $before, $after, $startedDay)
     IniWrite($g_ShopCacheFile,$section,"VerifiedUTC",ShopUTCNow())
     Return True
 EndFunc
+
+Func ShopRecordDailyExchange($key,$slot,$before,$after,$startedDay)
+    If Number($key)<2 Then
+        Local $names[6]=["アグレッシブ","スマート","シャイ","キュート","コミカル","クレバー"]
+        Return ShopRecordReportExchange($key,$names[$slot],$before,$after,$startedDay)
+    EndIf
+    If $startedDay<>ShopGameDay() Then Return False
+    Local $a=ShopCounterPair($before), $b=ShopCounterPair($after)
+    If Not IsArray($a) Or Not IsArray($b) Then Return False
+    If Number($b[1])<>Number($a[1]) Or Number($b[0])>=Number($a[0]) Then Return False
+    Local $section="exchange." & ShopGameDay() & ".daily" & $key
+    Local $amount=Int(IniRead($g_ShopCacheFile,$section,"ConfirmedQuantity","0"))+Number($a[0])-Number($b[0])
+    IniWrite($g_ShopCacheFile,$section,"ConfirmedQuantity",$amount)
+    IniWrite($g_ShopCacheFile,$section,"VerifiedUTC",ShopUTCNow())
+    Return True
+EndFunc
