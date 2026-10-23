@@ -13,6 +13,7 @@
 #include "Libs\ShopDailyPurchase.au3"
 #include "Libs\ShopMultiplier.au3"
 #include "Libs\ShopCompletion.au3"
+#include "Libs\ShopOre.au3"
 #include "Libs\ShopTabState.au3"
 #include "Libs\MazeProgression.au3"
 
@@ -293,8 +294,7 @@ EndFunc
 
 Func ActionStart()
     $g_RouteSelectAttempts = 0
-    ; Manual progression while stopped may have raised daily limits.
-    ShopDailyInvalidate()
+    ; Stop/Start resumes the same visit. Day/area changes and F9 invalidate caches.
     $g_ReportPriority = GUICtrlRead($cmbReportPriority)
     IniWrite($g_ShopCacheFile,"Settings","ReportPriority",$g_ReportPriority)
     Local $requested = StringStripWS(GUICtrlRead($inpArea), 3)
@@ -321,7 +321,6 @@ Func ActionStart()
     $g_AreaSelectAttempts = 0
     IniWrite($g_ShopCacheFile,"Settings","AutoAdvance",Int($g_MazeAdvance))
     IniWrite($g_ShopCacheFile,"Settings","AdvanceLimit",$g_MazeAdvanceLimit)
-    $g_ShopDetectedArea = 0
     $g_AreaSteps = 0
     $g_AreaLastRows = ""
     $g_AreaStuck = 0
@@ -610,6 +609,15 @@ Func ShopReadInteger($text)
     Return $value
 EndFunc
 
+Func ShopOreRead()
+    Local $currency[4]=[1115,65,110,45]
+    Return ShopReadInteger(MazeAreaOCR($currency,"en*",3))
+EndFunc
+
+Func ShopOreWait()
+    Sleep(250)
+EndFunc
+
 Func ShopPurchaseUncertain($reason)
     WriteLog("Shop kept open: " & $g_ShopCachePage & "; " & $reason)
     ActionStop()
@@ -628,14 +636,16 @@ Func ShopMaterialsShort($area)
 EndFunc
 
 Func ShopCanLeaveUpgradePage()
+    If ShopOreDepleted() Then Return True
     Local $count=Int(IniRead($g_ShopCacheFile,"page." & $g_ShopCachePage,"Slots","0"))
     If $count<1 Then Return ShopPurchaseUncertain("no registered items")
-    Local $balance=-1
+    Local $balance=-1, $allMax=True
     For $i=0 To $count-1
         If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return False
         Local $area=ShopRecordedCardArea($i)
         If Not IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_" & $g_ShopCachePage & "_" & $i & ".png",0.85,$area)) Then Return ShopPurchaseUncertain("item identity changed at slot " & $i)
         If IsArray(ImageSearch($sGameResDir & "MazeShop\Cache_LvMAX.png",0.88,$area)) Then ContinueLoop
+        $allMax=False
         ; Insufficient materials is temporary, never cache it as a maxed upgrade.
         If ShopMaterialsShort($area) Then ContinueLoop
         If $balance<0 Then
@@ -644,11 +654,17 @@ Func ShopCanLeaveUpgradePage()
         EndIf
         If $balance=0 Then
             ; Require a fresh second reading of the whole number, not a zero glyph.
-            If ShopReadInteger(MazeAreaOCR($currency,"en*",3))=0 Then Return True
+            If ShopReadInteger(MazeAreaOCR($currency,"en*",3))=0 Then
+                $g_ShopOreEmpty=True
+                Return True
+            EndIf
         EndIf
         Return ShopPurchaseUncertain("unfinished item without materials-shortage label; slot=" & $i & "; ore=" & $balance)
     Next
     WriteLog("Shop page checked: " & $g_ShopCachePage & "; every item is MAX or explicitly lacks materials.")
+    If $allMax Then ShopCacheMarkPageMax($g_ShopCachePage)
+    ShopCompletionRecord($g_ShopCachePage,$allMax)
+    ShopVisitMarkDone($g_ShopCachePage)
     Return True
 EndFunc
 
@@ -659,6 +675,7 @@ Func MazeShopBuying()
 
     Sleep($iDelayReaction)
     If Not $bRunning Then Return True
+    If ShopOreDepleted() Then Return True
     If $g_ShopCachePage <> "" And ShopRecordedPageIsMax() Then Return False
     If Not $bRunning Then Return True
     If Not ShopEnsureMaxMultiplier() Then
@@ -669,6 +686,7 @@ Func MazeShopBuying()
     While _ScanAndClickBuy("BuyUpgrade.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor)
         Sleep($iDelayAnimate)
         If Not $bRunning Then Return True
+        If ShopOreDepleted() Then Return True
     WEnd
 
     _MazeShopScroll("down")
@@ -677,6 +695,7 @@ Func MazeShopBuying()
     While _ScanAndClickBuy("BuyUpgrade.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor)
         Sleep($iDelayAnimate)
         If Not $bRunning Then Return True
+        If ShopOreDepleted() Then Return True
     WEnd
 
     _MazeShopScroll("up")
@@ -685,7 +704,8 @@ Func MazeShopBuying()
     Local $bBoughtB = False
     If _ScanAndClickBuy("BuyInvest.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor) Then
         $bBoughtB = True
-        Sleep($iDelayReaction)
+        Sleep($iDelayAnimate)
+        If ShopOreDepleted() Then Return True
     EndIf
 
     _MazeShopScroll("down")
@@ -693,7 +713,8 @@ Func MazeShopBuying()
 
     If _ScanAndClickBuy("BuyInvest.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor) Then
         $bBoughtB = True
-        Sleep($iDelayReaction)
+        Sleep($iDelayAnimate)
+        If ShopOreDepleted() Then Return True
     EndIf
 
     _MazeShopScroll("up")
@@ -807,7 +828,7 @@ Func MazeShopBuyingTypes($category = "artifact")
     For $i = 0 To 2
         If Not $bRunning Or Not WinActive($sGameWinTitle) Then Return True
         Local $page = $category & "." & $typeKeys[$i]
-        If ShopCacheSkipPage($page) Then ContinueLoop
+        If ShopVisitSkipPage($page) Then ContinueLoop
         Local $arrSubArea = [$aTypes[$i][1], $aTypes[$i][2], $aTypes[$i][3], $aTypes[$i][4]]
         Local $sFullImagePath = $sGameResDir & "MazeShop\" & $aTypes[$i][0]
         If Not ShopTypeSelected($typeKeys[$i],$arrSubArea) Then
@@ -841,8 +862,13 @@ EndFunc
 Func MazeShopFarming()
     ShopCacheBeginVisit()
     ShopCompletionReset()
+    If ShopExitWhenEmpty() Then Return
     ShopObserveVisibleDaily()
-    If ShopBuyDaily() Then Return
+    If ShopBuyDaily() Then
+        ShopExitWhenEmpty()
+        Return
+    EndIf
+    If ShopExitWhenEmpty() Then Return
     Local $fDefault = 0.85, $fLow = 0.80, $bCD = False, $iCDFactor = 2, $iDelayReaction = 250
 
     ; Each purchase page verifies MAX before spending ore.
@@ -855,9 +881,9 @@ Func MazeShopFarming()
 
     For $i = 0 To 2
         If Not $bRunning Then Return
-        If $i = 0 And ShopCacheSkipPage("equipment.en") And ShopCacheSkipPage("equipment.agile") And ShopCacheSkipPage("equipment.physical") Then ContinueLoop
-        If $i = 1 And ShopCacheSkipPage("excavate") Then ContinueLoop
-        If $i = 2 And ShopCacheSkipPage("artifact.en") And ShopCacheSkipPage("artifact.agile") And ShopCacheSkipPage("artifact.physical") Then ContinueLoop
+        If $i = 0 And ShopVisitSkipPage("equipment.en") And ShopVisitSkipPage("equipment.agile") And ShopVisitSkipPage("equipment.physical") Then ContinueLoop
+        If $i = 1 And ShopVisitSkipPage("excavate") Then ContinueLoop
+        If $i = 2 And ShopVisitSkipPage("artifact.en") And ShopVisitSkipPage("artifact.agile") And ShopVisitSkipPage("artifact.physical") Then ContinueLoop
         Local $arrSubArea = [$aCates[$i][1], $aCates[$i][2], $aCates[$i][3], $aCates[$i][4]]
         Local $sFullImagePath = $sGameResDir & "MazeShop\" & $aCates[$i][0]
         If Not ShopCategorySelected($i,$arrSubArea) Then
@@ -869,6 +895,7 @@ Func MazeShopFarming()
         EndIf
         $g_ShopCachePage = ($i = 1) ? "excavate" : ""
         Local $bStatus = ($i = 1) ? MazeShopBuying() : MazeShopBuyingTypes(($i = 0) ? "equipment" : "artifact")
+        If ShopExitWhenEmpty() Then Return
         If $bStatus Then Return
     Next
 
@@ -905,21 +932,13 @@ Func ShopStopIfExhausted()
     If $g_MazeAdvance Then Return False
     Local $upgrades = ShopCompletionUpgradeState()
     If $upgrades = 0 Then Return False
-    $g_ShopDailyForceLive = ($upgrades = 2)
     Local $daily = ShopDailyExhausted()
-    $g_ShopDailyForceLive = False
     If Not $bRunning Then Return True
     If $daily = 0 Then Return False
     If $daily = -1 Then
         WriteLog("Shop completion uncertain: daily counters could not be verified.")
         ActionStop()
         GUICtrlSetData($lblStatus, "Shop: Check limit")
-        Return True
-    EndIf
-    If $upgrades = 1 Then
-        ; Cached MAX is only a candidate. Repeat with all seven pages inspected live.
-        $g_ShopCacheFullReview = True
-        WriteLog("Shop completion candidate: reviewing every upgrade page before stopping.")
         Return True
     EndIf
     WriteLog("Shop exhausted: all upgrade pages MAX and all daily purchase caps reached.")

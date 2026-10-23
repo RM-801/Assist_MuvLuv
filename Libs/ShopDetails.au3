@@ -3,6 +3,8 @@ Global $g_ReportPriority = "指定なし", $g_ShopDailyForceLive = False
 
 Func ShopDailyInvalidate()
     For $i=0 To 3
+        $g_ShopVisitDailyFull[$i]=""
+        $g_ShopVisitDailyUnavailable[$i]=""
         IniWrite($g_ShopCacheFile,"daily." & $i,"Valid","0")
     Next
 EndFunc
@@ -34,9 +36,10 @@ Func ShopCounterPair($text)
 EndFunc
 
 Func ShopDailyRecord($key, $text)
-    If $g_ShopDetectedArea <= 0 Then Return False
     Local $p = ShopCounterPair($text)
     If Not IsArray($p) Then Return False
+    $g_ShopVisitDailyFull[Int($key)]=(Number($p[0])=0) ? ShopGameDay() : ""
+    If $g_ShopDetectedArea <= 0 Then Return True
     Local $section = "daily." & $key
     IniWrite($g_ShopCacheFile, $section, "Day", ShopGameDay())
     IniWrite($g_ShopCacheFile, $section, "Area", $g_ShopDetectedArea)
@@ -51,7 +54,8 @@ EndFunc
 
 Func ShopDailyCachedFull($key)
     Local $section = "daily." & $key
-    If $g_ShopDailyForceLive Or $g_ShopDetectedArea <= 0 Then Return False
+    If $g_ShopDailyForceLive Then Return False
+    If $g_ShopDetectedArea <= 0 Then Return $g_ShopVisitDailyFull[Int($key)]=ShopGameDay()
     If IniRead($g_ShopCacheFile,$section,"Valid","0") <> "1" Then Return False
     If IniRead($g_ShopCacheFile,$section,"CounterMode","") <> "remaining-v2" Then Return False
     If IniRead($g_ShopCacheFile,$section,"Day","") <> ShopGameDay() Then Return False
@@ -114,7 +118,7 @@ Func ShopMappedPageMax($page)
     For $i=0 To $n-1
         Local $id=$page & "." & $i, $level="level." & $id, $cap="cap." & $g_ShopDetectedArea & "." & $id
         If IniRead($g_ShopCacheFile,$level,"Valid","0")<>"1" Then Return False
-        If Not ShopFreshUTC(IniRead($g_ShopCacheFile,$level,"VerifiedUTC","")) Or Not ShopFreshUTC(IniRead($g_ShopCacheFile,$cap,"VerifiedUTC","")) Then Return False
+        If Not _DateIsValid(IniRead($g_ShopCacheFile,$level,"VerifiedUTC","")) Or Not _DateIsValid(IniRead($g_ShopCacheFile,$cap,"VerifiedUTC","")) Then Return False
         Local $limit=Int(IniRead($g_ShopCacheFile,$cap,"Value","0"))
         If $limit<1 Or Int(IniRead($g_ShopCacheFile,$level,"Value","-1"))<$limit Then Return False
     Next

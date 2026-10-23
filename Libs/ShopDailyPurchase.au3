@@ -6,13 +6,15 @@ Func ShopBuyDaily()
     If Not ShopDailyActive() Then Return True
     Local $allFull=True
     For $i=0 To 3
-        If Not ShopDailyCachedFull(String($i)) Then $allFull=False
+        If Not ShopDailyCachedFull(String($i)) And $g_ShopVisitDailyUnavailable[$i]<>ShopGameDay() Then $allFull=False
     Next
     If $allFull Then Return False
     If Not ShopDailyOpen() Then Return ShopDailyUncertain("daily category not recognized")
     For $i=0 To 3
         If Not ShopDailyActive() Then Return True
+        If ShopOreDepleted() Then Return True
         If ShopDailyCachedFull(String($i)) Then ContinueLoop
+        If $g_ShopVisitDailyUnavailable[$i]=ShopGameDay() Then ContinueLoop
         If Not ShopDailySelect($i) Then Return ShopDailyUncertain("daily tab not selected: " & $i)
         Local $before=ShopDailyReadCounter(), $pair=ShopCounterPair($before)
         If Not IsArray($pair) Then Return ShopDailyUncertain("daily counter unreadable: " & $i)
@@ -25,6 +27,7 @@ Func ShopBuyDaily()
         If $slot<0 Then $slot=0
         If Not ShopDailyIdentity($i,$slot) Then Return ShopDailyUncertain("daily item not recognized: " & $i & "/" & $slot)
         If Not ShopDailyEnabled($slot) Then
+            $g_ShopVisitDailyUnavailable[$i]=ShopGameDay()
             WriteLog("Shop daily: not affordable now; page=" & $i & "; remaining=" & $pair[0])
             ContinueLoop
         EndIf

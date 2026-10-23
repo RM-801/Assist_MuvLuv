@@ -30,6 +30,7 @@ Check(ShopBuyDaily() And $page=2 And $remaining[2]=0,"skip unaffordable report b
 Check(Not ShopDailyCachedFull("0"),"unaffordable is not exhausted")
 Check(Not ShopBuyDaily(),"allow upgrades when remaining daily items unaffordable")
 $enabled[0]=True
+ShopCacheEndVisit() ; Fresh visit with newly available currency.
 $accept=False
 $fail=""
 Local $before=$clicks
@@ -63,6 +64,9 @@ Func Cleanup()
 EndFunc
 Func ShopDailyActive()
     Return $active
+EndFunc
+Func ShopOreDepleted()
+    Return False
 EndFunc
 Func ShopDailyOpen()
     $opened+=1

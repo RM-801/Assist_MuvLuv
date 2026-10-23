@@ -18,7 +18,7 @@ Func ShopCompletionRecord($page, $allMax)
     Next
 EndFunc
 
-; 0: upgrades remain/unknown; 1: cached candidate needs review; 2: all live MAX.
+; 0: upgrades remain/unknown; 1: verified cached MAX; 2: all live MAX.
 Func ShopCompletionUpgradeState()
     Local $live = True
     For $i = 0 To 6
