@@ -20,9 +20,12 @@ The UI templates use the original 1264 x 712 window reference. Scaling is suppor
 - Final shop: selected-tab recognition, level and area-cap observations, daily counters with a 05:00 JST reset, selectable skill-report attribute priority, and a stop check for exhausted purchases and upgrades.
 - Daily exchanges run before upgrades, in Report I / Report II / Disk / Unit order. An already-selected Daily page needs no category click. Reports use the selected attribute; `指定なし` buys the first attribute (アグレッシブ). Same-day exhausted tabs are skipped. An unaffordable item retains its remaining quota, and a purchase is recorded only after the remaining count decreases. An unreadable counter or unconfirmed purchase keeps the shop open and stops for inspection.
 - Daily purchases and upgrades select the top-right `MAX` multiplier before spending ore. Each toggle waits for a verified change; an existing MAX is left untouched. Unreadable or unresponsive controls stop purchasing. Bulk daily exchanges record the actual remaining-count decrease, not one unit per click.
+- Daily tab selection requires both the left Daily category and the top tab to have a selected blue fill. This avoids old text templates containing click effects and rejects upgrade tabs at identical coordinates. Multiplier recognition uses clean x1/x10/MAX captures with OCR fallback; the cycle icon itself need not match beneath the cursor.
 - OpenCV: safer resizing of captured images and templates.
 
 ## Limits and verification
+
+On 2026-10-24, a live retry with exhausted report counters and 28 ore remaining completed shop handling and returned to the next Maze run without the former Daily-tab/counter stop. This verifies that recovery path, not a fresh daily bulk purchase. New regression fixtures independently cover clean report II and reject physical/EN artifact tabs as Daily.
 
 `Tests/ShopDailyPurchase.au3` exercises the actual daily purchase flow with simulated UI responses, including all four categories, default/preferred attributes, cache/reset behavior, shortage, failed confirmation and interruption. `Tests/ShopDailyUI.au3` checks captured tab/item controls at three scales, including the already-selected first page. These are offline checks; the complete daily exchange flow still needs live validation.
 

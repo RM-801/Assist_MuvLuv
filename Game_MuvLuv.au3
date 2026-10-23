@@ -745,6 +745,14 @@ Func ShopIsVisible()
     Return False
 EndFunc
 
+Func ShopDailyCapture($area)
+    Local $bounds=_WinAPI_GetPosWithoutShadow($sGameWinTitle)
+    If Not IsArray($bounds) Then Return False
+    Local $scale=$bounds[3]/712
+    Local $crop[4]=[$bounds[0]+Int($area[0]*$scale),$bounds[1]+Int($area[1]*$scale),Int($area[2]*$scale),Int($area[3]*$scale)]
+    Return _OpenCV_GetDesktopScreenMat($crop)
+EndFunc
+
 Func ShopTypeSelected($key,$region)
     If Not StringRegExp($key,"^(physical|en|agile)$") Then Return False
     Local $bounds = _WinAPI_GetPosWithoutShadow($sGameWinTitle)
@@ -777,13 +785,10 @@ Func ShopCategorySelected($index,$area)
 EndFunc
 
 Func ShopObserveVisibleDaily()
-    Local $tabs[4]=["Stop_DailyReport1Selected.png","Stop_DailyReport2Selected.png","Stop_DailyDiskSelected.png","Stop_DailyUnitSelected.png"]
     For $i=0 To 3
         If ShopDailyCachedFull(String($i)) Then ContinueLoop
-        Local $tab[4]=[190+145*$i,125,145,45]
-        If Not IsArray(ImageSearch($sGameResDir & "MazeShop\" & $tabs[$i],0.85,$tab)) Then ContinueLoop
-        Local $counter[4]=[190,581,220,33]
-        ShopDailyRecord(String($i),MazeAreaOCR($counter,"ja*",4))
+        If Not ShopDailySelected($i) Then ContinueLoop
+        ShopDailyRecord(String($i),ShopDailyReadCounter())
         Return
     Next
 EndFunc

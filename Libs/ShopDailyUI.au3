@@ -14,9 +14,16 @@ Func ShopDailyMatch($name,$area)
 EndFunc
 
 Func ShopDailySelected($page)
-    Local $tab[4]=[190+145*$page,125,145,45]
-    Return ShopDailyMatch($g_DailyTabs[$page] & "Selected",$tab)
+    If $page<0 Or $page>3 Then Return False
+    ; Type-equipment and artifact tabs occupy the same top-row coordinates.
+    ; A blue tab alone must never identify the Daily category.
+    Local $category[4]=[20,220,115,55]
+    If Not ShopTabPixelsSelected(ShopDailyCapture($category),$cv) Then Return False
+    Local $tab[4]=[195+145*$page,130,130,35]
+    ; Selected text templates contained a captured click effect. Use the fill.
+    Return ShopTabPixelsSelected(ShopDailyCapture($tab),$cv)
 EndFunc
+
 
 Func ShopDailyOpen()
     ; The shop normally opens on the selected first Daily tab.
@@ -38,8 +45,12 @@ EndFunc
 
 Func ShopDailySelect($page)
     If ShopDailySelected($page) Then Return True
-    Local $tab[4]=[190+145*$page,125,145,45]
-    If Not ShopDailyMatch($g_DailyTabs[$page],$tab) Then Return False
+    ; Only use these fixed tab positions on a verified Daily page.
+    Local $daily=False
+    For $i=0 To 3
+        If ShopDailySelected($i) Then $daily=True
+    Next
+    If Not $daily Then Return False
     If Not MazeAreaPoint(260+145*$page,147) Then Return False
     For $attempt=1 To 8
         Sleep(250)
@@ -96,12 +107,24 @@ EndFunc
 Func ShopMultiplierRead()
     ; Only read the top-right multiplier, never an item's LvMAX label.
     Local $value[4]=[1110,132,72,35]
-    Return ShopMultiplierParse(MazeAreaOCR($value,"en*",4))
+    Local $states[3]=["MAX","X10","X1"],$sizes[5]=[1,1.025,0.975,1.05,0.95]
+    For $state In $states
+        For $size In $sizes
+            If IsArray(ImageSearch($sGameResDir & "MazeShop\Multiplier" & $state & ".png",0.90,$value,712,$size)) Then Return $state
+        Next
+    Next
+    Local $reading=MazeAreaOCR($value,"en*",4),$result=ShopMultiplierParse($reading)
+    If $result="" Then WriteLog("Shop multiplier unreadable: " & StringReplace(StringStripCR($reading),@LF,"; "))
+    Return $result
 EndFunc
 
 Func ShopMultiplierClick()
-    Local $control[4]=[1180,128,40,45]
-    If Not ShopDailyActive() Or Not ShopDailyMatch("MultiplierCycle",$control) Then Return False
+    ; A cursor/click effect can cover the tiny cycle icon. The multiplier itself
+    ; identifies the control; do not require cursor-shaped template pixels.
+    If Not ShopDailyActive() Then Return False
+    Local $value=ShopMultiplierRead()
+    If $value="" Or $value="MAX" Then Return False
+    WriteLog("Shop multiplier: changing " & $value & " toward MAX")
     Return MazeAreaPoint(1199,150)
 EndFunc
 
