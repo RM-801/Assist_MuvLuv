@@ -1,5 +1,6 @@
 #include "..\Libs\autoit-opencv-com\udf\opencv_udf_utils.au3"
 #include "..\Libs\ImageScaleSafe.au3"
+#include "..\Libs\ShopMultiplier.au3"
 Global $root=@ScriptDir & "\..\",$sGameResDir=$root & "Games\MuvLuv\",$sGameWinTitle="offline",$bRunning=True
 _OpenCV_Open($root & "Libs\opencv\build\x64\vc16\bin\opencv_world4120.dll",$root & "Libs\autoit-opencv-com\autoit_opencv_com4120.dll")
 Global $cv=_OpenCV_get(),$screen=0,$clicks=0

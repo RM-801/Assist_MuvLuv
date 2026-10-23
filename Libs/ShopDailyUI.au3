@@ -92,3 +92,19 @@ Func ShopDailyUncertain($reason)
     ShopPurchaseUncertain($reason)
     Return True
 EndFunc
+
+Func ShopMultiplierRead()
+    ; Only read the top-right multiplier, never an item's LvMAX label.
+    Local $value[4]=[1110,132,72,35]
+    Return ShopMultiplierParse(MazeAreaOCR($value,"en*",4))
+EndFunc
+
+Func ShopMultiplierClick()
+    Local $control[4]=[1180,128,40,45]
+    If Not ShopDailyActive() Or Not ShopDailyMatch("MultiplierCycle",$control) Then Return False
+    Return MazeAreaPoint(1199,150)
+EndFunc
+
+Func ShopMultiplierWait()
+    Sleep(250)
+EndFunc

@@ -11,6 +11,7 @@
 #include "Libs\MazeShopCache.au3"
 #include "Libs\ShopDetails.au3"
 #include "Libs\ShopDailyPurchase.au3"
+#include "Libs\ShopMultiplier.au3"
 #include "Libs\ShopCompletion.au3"
 #include "Libs\ShopTabState.au3"
 #include "Libs\MazeProgression.au3"
@@ -660,7 +661,10 @@ Func MazeShopBuying()
     If Not $bRunning Then Return True
     If $g_ShopCachePage <> "" And ShopRecordedPageIsMax() Then Return False
     If Not $bRunning Then Return True
-    ; Preserve the user-selected upgrade multiplier, including MAX.
+    If Not ShopEnsureMaxMultiplier() Then
+        If ShopDailyActive() Then ShopPurchaseUncertain("cannot verify MAX upgrade multiplier")
+        Return True
+    EndIf
 
     While _ScanAndClickBuy("BuyUpgrade.png", $fDefaultThreshold, $bDefaultCDOn, $iDefaultCDFactor)
         Sleep($iDelayAnimate)
@@ -836,7 +840,7 @@ Func MazeShopFarming()
     If ShopBuyDaily() Then Return
     Local $fDefault = 0.85, $fLow = 0.80, $bCD = False, $iCDFactor = 2, $iDelayReaction = 250
 
-    ; Do not cycle x1 into x10: it also affects subsequent upgrade pages.
+    ; Each purchase page verifies MAX before spending ore.
 
     Local $aCates[3][5] = [ _
         ["Cate_TypeEquip.png", 10, 295, 135, 75], _

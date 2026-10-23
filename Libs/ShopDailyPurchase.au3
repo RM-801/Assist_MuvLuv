@@ -18,6 +18,7 @@ Func ShopBuyDaily()
         If Not IsArray($pair) Then Return ShopDailyUncertain("daily counter unreadable: " & $i)
         ShopDailyRecord(String($i),$before)
         If Number($pair[0])=0 Then ContinueLoop
+        If Not ShopEnsureMaxMultiplier() Then Return ShopDailyUncertain("cannot verify MAX purchase multiplier")
         Local $slot=0
         If $i<2 Then $slot=ShopReportSlot($g_ReportPriority)
         ; No preference means the first report, not disabled daily purchasing.

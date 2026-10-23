@@ -49,6 +49,11 @@ If ShopCompletionParseCounter("OK" & @LF & "0|0|100|20|0/2")<>1 Then Exit 19
 If ShopCompletionParseCounter("OK" & @LF & "0|0|100|20|2/2")<>0 Then Exit 20
 If ShopCompletionParseCounter("OK" & @LF & "0|0|100|20|1/2")<>0 Then Exit 21
 If ShopCompletionParseCounter("OK" & @LF & "0|0|100|20|3/2")<>-1 Then Exit 22
+Local $bulkBefore="0|0|100|20|24/24",$bulkAfter="0|0|100|20|0/24"
+If Not ShopRecordDailyExchange("0",2,$bulkBefore,$bulkAfter,ShopGameDay()) Then Exit 27
+If IniRead($g_ShopCacheFile,"exchange." & ShopGameDay() & ".report0.2","ConfirmedQuantity","0")<>"24" Then Exit 28
+If Not ShopRecordDailyExchange("3",0,"0|0|100|20|3/3","0|0|100|20|0/3",ShopGameDay()) Then Exit 29
+If IniRead($g_ShopCacheFile,"exchange." & ShopGameDay() & ".daily3","ConfirmedQuantity","0")<>"3" Then Exit 30
 ConsoleWrite("PASS JST05 boundary; per-day counters; new area invalidation; shared levels and per-area caps; purchase invalidation; all six priority slots." & @CRLF)
 Exit 0
 Func CleanupTestCache()

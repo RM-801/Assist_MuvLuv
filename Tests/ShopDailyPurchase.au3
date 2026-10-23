@@ -2,7 +2,7 @@
 #include "..\Libs\ShopDailyPurchase.au3"
 Global $active=True,$page=0,$selected[4]=[0,0,0,0],$remaining[4]=[2,2,2,2]
 Global $enabled[4]=[True,True,True,True],$clicks=0,$lastSlot=-1,$fail="",$accept=True,$readable=True
-Global $opened=0,$wrongIdentity=False
+Global $opened=0,$wrongIdentity=False,$maxReady=True,$maxChecks=0
 $g_ShopCacheFile=@ScriptDir & "\daily-test-" & @AutoItPID & ".ini"
 $g_ShopDetectedArea=200
 OnAutoItExitRegister("Cleanup")
@@ -41,6 +41,10 @@ $fail=""
 $before=$clicks
 Check(ShopBuyDaily() And $fail<>"" And $clicks=$before,"unreadable counter does not buy or leave")
 $readable=True
+$maxReady=False
+$fail=""
+Check(ShopBuyDaily() And $fail<>"" And $clicks=$before,"unverified MAX prevents purchase")
+$maxReady=True
 $wrongIdentity=True
 $fail=""
 Check(ShopBuyDaily() And $fail<>"" And $clicks=$before,"identity mismatch does not buy")
@@ -81,6 +85,10 @@ Func ShopDailyIdentity($i,$slot)
 EndFunc
 Func ShopDailyEnabled($slot)
     Return $enabled[$page]
+EndFunc
+Func ShopEnsureMaxMultiplier()
+    $maxChecks+=1
+    Return $maxReady
 EndFunc
 Func ShopDailyClick($slot)
     $clicks+=1
